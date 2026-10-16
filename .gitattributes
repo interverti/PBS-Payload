@@ -1,0 +1,15 @@
+* text=auto eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.java text eol=lf
+*.ps1 text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+gradlew text eol=lf
+*.bat text eol=crlf
+*.png binary
+*.rgba binary
+*.ttf binary
+*.jar binary

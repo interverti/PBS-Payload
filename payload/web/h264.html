@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PBS · PS5 live</title><style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b0d10;color:#e7e9ee;font:15px/1.5 system-ui,Segoe UI,sans-serif}header{padding:18px 24px;border-bottom:1px solid #262c34;display:flex;align-items:center;gap:16px;flex-wrap:wrap}h1{font-size:20px;margin:0}header span{color:#99a6b7}.video-shell{position:relative}.banner{position:absolute;right:16px;bottom:24px;z-index:2;width:24%;max-width:240px;min-width:96px;pointer-events:none;opacity:.88}.banner img{display:block;width:100%;height:auto}#record-info{font-variant-numeric:tabular-nums;color:#ffb1ad}.recordings{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0 28px}.stop-area{margin-top:28px;border-top:1px solid #263242;padding-top:18px;display:flex;gap:16px;align-items:center}.stop-area button{background:transparent;font-size:13px}main{max-width:1440px;margin:auto;padding:24px}video{display:block;width:100%;aspect-ratio:16/9;background:#000;border-radius:12px}nav{display:flex;flex-wrap:wrap;gap:12px;margin:20px 0}button,a{font:inherit;color:inherit;border:1px solid #364252;border-radius:8px;padding:10px 16px;background:#18212d;text-decoration:none;cursor:pointer}button:hover,a:hover{background:#233145}button.active{background:#702929}#message{color:#a8b6c8}#stats{font-variant-numeric:tabular-nums;color:#90d5a1}#audiostats{font-variant-numeric:tabular-nums;color:#c8b6ff}.audio-controls{display:flex;align-items:center;gap:10px;border:1px solid #364252;border-radius:8px;padding:6px 12px;background:#131b25}.audio-controls label{display:flex;align-items:center;gap:6px;font-size:13px;color:#99a6b7}.audio-controls input[type=range]{width:110px}small{color:#7e8da0}</style></head>
+<body><header><h1>PBS</h1><span>PS5 live · Hardware H.264</span><span id="stats"></span><span id="audiostats"></span><span id="latency"></span></header><main>
+<div class="video-shell"><video id="video" autoplay muted playsinline controls></video><div class="banner"><img src="/banner.png" alt="Seregonwar banner"></div></div><nav><button id="record">Record</button><button id="snapshot">Save snapshot</button><a id="download" hidden>Download recording</a><div class="audio-controls"><button id="audio">Sound off</button><label>Volume <input id="volume" type="range" min="0" max="400" value="150"></label><label>Delay <input id="delay" type="range" min="0" max="400" step="10" value="120"> <span id="delayval">120 ms</span></label></div></nav>
+<p id="record-info" aria-live="polite">Not recording</p><h2>Recordings</h2><div class="recordings" id="recordings">Loading recordings…</div>
+<p id="message">Connecting to the console…</p><small>Captured and recorded on your PS5. Watch live in your browser without a Remote Play client.</small><div class="stop-area"><button id="stop">Stop streaming</button><small>Stops the live feed and releases capture resources.</small></div>
+</main><script>
+/*PBS_MUX*/
+</script><script>
+const video=document.getElementById('video'),message=document.getElementById('message'),record=document.getElementById('record');
+let recording=false,stopped=false,statusBusy=false,recordingName="";
+async function listRecordings(){const items=await(await fetch("/recordings",{cache:"no-store"})).json();const panel=document.getElementById("recordings");panel.replaceChildren();for(const item of items.reverse()){const link=document.createElement("a");link.href="/recordings/"+encodeURIComponent(item.name);link.download=item.name;link.textContent=item.name+" · "+(item.bytes/1048576).toFixed(1)+" MB";panel.appendChild(link);}if(!items.length)panel.textContent="No recordings yet";}
+async function updateStatus(){
+ if(statusBusy||stopped)return;statusBusy=true;
+ try{const response=await fetch('/status.json',{cache:'no-store'});if(!response.ok)throw new Error('Status unavailable');const s=await response.json();recording=s.recording;record.textContent=recording?'Stop recording':'Record';record.classList.toggle('active',recording);document.getElementById('stats').textContent=`${s.width} × ${s.height} · ${s.fps.toFixed(1)} fps · ${s.kbps.toFixed(0)} kbit/s`;const info=document.getElementById('record-info');info.textContent=s.recording_error?'Recording failed: unable to write to the console.':recording?`Recording · ${s.recording_seconds.toFixed(1)} seconds · ${(s.recording_bytes/1048576).toFixed(2)} MB`:s.recording_name?`Saved · ${s.recording_seconds.toFixed(1)} seconds · ${(s.recording_bytes/1048576).toFixed(2)} MB`:'Not recording';const link=document.getElementById('download');link.hidden=!s.recording_name||recording;if(!link.hidden){link.href='/recordings/'+encodeURIComponent(s.recording_name);link.download=s.recording_name;}if(!recording&&s.recording_name!==recordingName){recordingName=s.recording_name;await listRecordings();}}
+ catch(e){message.textContent='Connection lost. The recording status cannot be verified.';}
+ finally{statusBusy=false;}
+}
+record.onclick=async()=>{record.disabled=true;try{const response=await fetch(recording?'/record/stop':'/record/start',{method:'POST'});if(!response.ok)throw new Error('The recording command failed.');await updateStatus();await listRecordings();}catch(e){document.getElementById('record-info').textContent=e.message;}finally{record.disabled=false;}};
+document.getElementById('snapshot').onclick=()=>{if(!video.videoWidth)return;const canvas=document.createElement('canvas');canvas.width=video.videoWidth;canvas.height=video.videoHeight;canvas.getContext('2d').drawImage(video,0,0);canvas.toBlob(blob=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ps5.png';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),5000);});};
+document.getElementById('stop').onclick=async()=>{stopped=true;await fetch('/stop',{method:'POST'});video.pause();message.textContent='Stream stopped. Capture resources have been released.';};
+async function play(){
+ const config=window.pbsConfig=await(await fetch('/config.json')).json();const mime=`video/mp4; codecs="${config.codec}"`;
+ if(!window.MediaSource||!MediaSource.isTypeSupported(mime))throw new Error('This browser does not support this H.264 stream. Open the viewer in Chrome, Edge or Safari.');
+ const media=new MediaSource();video.src=URL.createObjectURL(media);await new Promise(resolve=>media.addEventListener('sourceopen',resolve,{once:true}));
+ const source=media.addSourceBuffer(mime),queue=[H264Mux.init(config)];let sequence=1,recovering=true;video.autoplay=false;video.pause();video.addEventListener('waiting',()=>{if(!stopped){recovering=true;video.pause();message.textContent='Buffering…';}});
+ const drain=()=>{if(!source.updating&&queue.length){if(queue.length>300)throw new Error('The browser cannot keep up with the live stream. Reload to reconnect.');source.appendBuffer(queue.shift());}};
+ source.addEventListener('error',()=>{message.textContent='Playback error. Reload to reconnect.';});
+ source.addEventListener('updateend',()=>{if(video.buffered.length){const i=video.buffered.length-1,start=video.buffered.start(i),end=video.buffered.end(i);if(video.currentTime<start||end-video.currentTime>0.10)video.currentTime=Math.max(start,end-0.033);document.getElementById('latency').textContent=`Playback buffer: ${Math.round(Math.max(0,end-video.currentTime)*1000)} ms`;video.playbackRate=end-video.currentTime>0.055?1.05:end-video.currentTime<0.02?0.98:1;if(recovering&&end-video.currentTime>=0.033&&!stopped){recovering=false;video.play().catch(()=>{message.textContent='Press Play to start.';});}if(!queue.length&&start<video.currentTime-20){source.remove(start,video.currentTime-10);return;}}drain();});
+ drain();const response=await fetch('/frames');if(!response.ok)throw new Error('Unable to open the stream.');const reader=response.body.getReader();let pending=new Uint8Array();let samples=[],firstPts=0;
+ while(!stopped){const {value,done}=await reader.read();if(done)break;const merged=new Uint8Array(pending.length+value.length);merged.set(pending);merged.set(value,pending.length);pending=merged;let offset=0;
+  while(pending.length-offset>=8){const view=new DataView(pending.buffer,pending.byteOffset+offset);const size=view.getUint32(0),pts=view.getUint32(4);if(size>2097152)throw new Error('Frame exceeds the supported size');if(pending.length-offset<8+size)break;const sample=H264Mux.accessUnit(pending.subarray(offset+8,offset+8+size));if(!samples.length)firstPts=pts;samples.push(sample);offset+=8+size;if(samples.length>=1){queue.push(H264Mux.fragment(sequence++,firstPts,samples));samples=[];drain();if(!recovering)message.textContent='Live from PS5';}}
+  pending=pending.slice(offset);
+ }
+ if(!stopped)message.textContent='Stream disconnected. Reload to reconnect.';reader.cancel().catch(()=>{});
+}
+play().catch(e=>{message.textContent=e.message;});updateStatus();listRecordings().catch(()=>{});setInterval(updateStatus,1000);
+</script><script>
+/* --- Audio PCM dal canale avcap2 -> Web Audio ---
+ * Il viewer e' servito in HTTP semplice: AudioWorklet richiede un contesto
+ * sicuro, quindi si usa ScriptProcessorNode (deprecato ma universale) con
+ * una coda che regola il ritardo audio/video. */
+let audioCtx=null,audioSource=null,audioGain=null,audioOn=false,audioStopped=false;
+const audioBtn=document.getElementById('audio'),audiostats=document.getElementById('audiostats');
+const AQ={chunks:[],head:0,recv:0,played:0,under:0,ch:2,rate:48000,delayMs:120,peak:0,
+ push(samples,ch){this.chunks.push(samples);this.recv+=samples.length/ch;this.ch=ch;
+  for(let i=0;i<samples.length;i++){const a=samples[i]<0?-samples[i]:samples[i];if(a>this.peak)this.peak=a;}
+  if(this.recv-this.played>this.rate*3)this.played=this.recv-Math.round(this.rate*1.5);},
+ frames(){return this.chunks.length?this.chunks[0].length/this.ch:0;},
+ pull(out,frames){
+  const delay=Math.round(this.delayMs*this.rate/1000);
+  const limit=Math.min(this.recv-delay,this.head+this.total());
+  let i=0;
+  for(;i<frames&&this.played<limit;i++){
+   while(this.chunks.length&&this.played>=this.head+this.frames()){this.head+=this.frames();this.chunks.shift();}
+   const off=(this.played-this.head)*this.ch,chunk=this.chunks[0];
+   for(let c=0;c<out.length;c++)out[c][i]=chunk?chunk[off+c]||0:0;
+   this.played++;
+  }
+  for(;i<frames;i++)for(let c=0;c<out.length;c++)out[c][i]=0;
+  if(i<frames)this.under++;
+ },
+ total(){const ch=this.ch;return this.chunks.reduce((n,a)=>n+a.length/ch,0);}
+};
+function pcmToFloat(bytes,format,ch){
+ if(format==='pcm_s16le'){const s=new Int16Array(bytes.buffer,bytes.byteOffset,bytes.length>>1);const f=new Float32Array(s.length);for(let i=0;i<s.length;i++)f[i]=s[i]/32768;return f;}
+ if(format==='pcm_s32le'){const s=new Int32Array(bytes.buffer,bytes.byteOffset,bytes.length>>2);const f=new Float32Array(s.length);for(let i=0;i<s.length;i++)f[i]=s[i]/2147483648;return f;}
+ const f=bytes.length&3?bytes.length-(bytes.length&3):bytes.length;
+ return new Float32Array(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+f));
+}
+async function startAudio(){
+ const cfg=window.pbsConfig&&window.pbsConfig.audio;if(!cfg)throw new Error('The console is not sending audio.');
+ const rate=cfg.rate||48000,ch=cfg.channels||2;
+ AQ.ch=ch;AQ.rate=rate;AQ.delayMs=Number(document.getElementById('delay').value);
+ audioCtx=new AudioContext({sampleRate:rate});
+ await audioCtx.resume();
+ audioGain=audioCtx.createGain();
+ audioGain.gain.value=document.getElementById('volume').value/100;
+ audioGain.connect(audioCtx.destination);
+ const bufferSize=2048;
+ audioSource=audioCtx.createScriptProcessor(bufferSize,0,ch);
+ audioSource.onaudioprocess=(e)=>{
+  const out=[];for(let c=0;c<ch;c++)out.push(e.outputBuffer.getChannelData(c));
+  AQ.pull(out,out[0]?out[0].length:bufferSize);
+ };
+ audioSource.connect(audioGain);
+ setInterval(()=>{
+  if(!audioOn)return;
+  const buf=Math.round(1000*Math.max(0,AQ.recv-AQ.played)/AQ.rate);
+  const level=AQ.peak>=1e-5?`${(20*Math.log10(AQ.peak)).toFixed(0)} dBFS`:'silenzio';
+  audiostats.textContent=`Audio ${Math.round(AQ.rate/1000)} kHz · ${AQ.ch} ch · buffer ${buf} ms · livello ${level}${AQ.under?' · drop '+AQ.under:''}`;
+  AQ.peak=0;
+ },250);
+ audioOn=true;audioBtn.textContent='Sound on';audioBtn.classList.add('active');
+ audioStreamLoop().catch((e)=>{message.textContent='Audio: '+e.message;});
+}
+function stopAudio(){audioStopped=true;audioOn=false;audioBtn.textContent='Sound off';audioBtn.classList.remove('active');audiostats.textContent='';
+ if(audioSource){audioSource.disconnect();audioSource.onaudioprocess=null;audioSource=null;}
+ if(audioGain){audioGain.disconnect();audioGain=null;}
+ if(audioCtx){audioCtx.close();audioCtx=null;}}
+async function audioStreamLoop(){
+ const cfg=window.pbsConfig.audio,format=cfg.codec||'pcm_f32le',ch=cfg.channels||2;
+ const response=await fetch('/audio',{cache:'no-store'});if(!response.ok)throw new Error('unable to open the audio stream');
+ const reader=response.body.getReader();let pending=new Uint8Array();
+ while(!audioStopped){const {value,done}=await reader.read();if(done)break;const merged=new Uint8Array(pending.length+value.length);merged.set(pending);merged.set(value,pending.length);pending=merged;let offset=0;
+  while(pending.length-offset>=8){const view=new DataView(pending.buffer,pending.byteOffset+offset);const size=view.getUint32(0);if(size>65536||pending.length-offset<8+size)break;AQ.push(pcmToFloat(pending.subarray(offset+8,offset+8+size),format,ch),ch);offset+=8+size;}
+  pending=pending.slice(offset);
+ }
+}
+audioBtn.onclick=async()=>{audioBtn.disabled=true;try{if(audioOn)stopAudio();else{audioStopped=false;await startAudio();}}catch(e){message.textContent='Audio: '+e.message;}finally{audioBtn.disabled=false;}};
+/* Start audio on the first user gesture to satisfy browser autoplay rules. */
+const autoStart=async()=>{if(audioOn||audioStopped)return;try{await startAudio();}catch(e){/* il pulsante resta manuale */}};
+document.addEventListener('click',autoStart,{once:false});
+document.addEventListener('keydown',autoStart,{once:false});
+document.getElementById('volume').oninput=(e)=>{if(audioGain)audioGain.gain.value=e.target.value/100;};
+document.getElementById('delay').oninput=(e)=>{const v=Number(e.target.value);document.getElementById('delayval').textContent=v+' ms';AQ.delayMs=v;};
+document.getElementById('stop').addEventListener('click',()=>{if(audioOn)stopAudio();});
+audioBtn.disabled=true;
+setTimeout(()=>{const cfg=window.pbsConfig&&window.pbsConfig.audio;if(cfg){audioBtn.disabled=false;audioBtn.title='Play console audio in this browser.';}else{audioBtn.title='No audio channel on this stream.';}},2500);
+</script></body></html>
