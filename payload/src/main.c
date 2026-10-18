@@ -590,7 +590,7 @@ avopen_cleanup:
       usleep(250000);
       if (pbs_h264_server_running() || (!live_server_started && live_start_attempts < 6)) goto avopen_retry;
     }
-    if (live_request) pbs_h264_server_stop();
+    if (live_request) { pbs_h264_server_stop(); pbs_h264_server_wait(); }
     notify("PBS: streaming stopped");
     return 0;
   }

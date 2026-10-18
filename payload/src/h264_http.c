@@ -3,6 +3,7 @@
 #include "h264_webui.h"
 #include "h264_banner.h"
 #include "h264_rtp.h"
+#include "video_buffer.h"
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <dirent.h>
@@ -19,13 +20,26 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef PBS_PS4
+#include <fcntl.h>
+static void ps4_http_trace(const char *text) {
+  int fd = open("/data/pbs/ps4/http.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
+  if (fd >= 0) { write(fd, text, strlen(text)); close(fd); }
+}
+#define HTTP_TRACE(text) ps4_http_trace(text)
+#else
+#define HTTP_TRACE(text) ((void)0)
+#endif
 
 #define SLOTS 64
 #define FRAME_MAX 0x200000u
 #define AUDIO_SLOTS 256
 #define AUDIO_MAX 0x4000u
-#define REC_DIR "/data/pbs/recordings"
-typedef struct { unsigned char *data; size_t len; uint64_t seq; uint32_t pts; int key; } frame_t;
+#ifndef PBS_RECORD_DIR
+#define PBS_RECORD_DIR "/data/pbs/recordings"
+#endif
+#define REC_DIR PBS_RECORD_DIR
+typedef struct { unsigned char *data; size_t len, capacity; uint64_t seq; uint32_t pts; int key; } frame_t;
 typedef struct { unsigned char *data; size_t len; uint64_t seq; uint32_t pts; } audio_chunk_t;
 static struct {
   pthread_mutex_t lock;
@@ -34,11 +48,12 @@ static struct {
   unsigned char sps[128], pps[128];
   size_t sps_len, pps_len;
   uint64_t seq, bytes, started;
-  int running, listener, clients, key_request, rec_pending, width, height;
+  int running, listener, clients, key_request, rec_pending, width, height, fps;
   int media_clients;
   int restart_request;
   uint64_t generation;
   FILE *rec;
+  int rec_headers_pending;
   uint64_t rec_frames, rec_bytes, rec_started;
   int rec_error;
   char rec_name[96];
@@ -48,6 +63,8 @@ static struct {
   uint64_t audio_generation;
   int audio_channels, audio_rate;
   char audio_codec[16];
+  pthread_t acceptor, workers[16];
+  int acceptor_valid, worker_valid[16], worker_active[16], worker_fd[16];
 } live = { .lock = PTHREAD_MUTEX_INITIALIZER, .changed = PTHREAD_COND_INITIALIZER, .listener = -1,
            .audio_channels = 2, .audio_rate = 48000 };
 
@@ -65,6 +82,8 @@ static int wait_media(int fd, uint64_t generation, int audio) {
 void pbs_h264_discontinuity(void) {
   pthread_mutex_lock(&live.lock);
   live.generation++;
+  if (live.rec) live.rec_headers_pending = 1;
+  live.key_request = 1;
   pthread_cond_broadcast(&live.changed);
   pthread_mutex_unlock(&live.lock);
 }
@@ -112,9 +131,10 @@ int pbs_h264_publish(const void *data, size_t length, uint32_t pts) {
   pthread_mutex_lock(&live.lock);
   uint64_t seq = live.seq + 1;
   frame_t *frame = &live.frames[seq % SLOTS];
-  unsigned char *buffer = realloc(frame->data, length);
+  unsigned char *buffer = pbs_video_grow(frame->data, frame->capacity, length);
   if (!buffer) { pthread_mutex_unlock(&live.lock); return -1; }
   frame->data = buffer;
+  if (length > frame->capacity) frame->capacity = pbs_video_capacity(length);
   memcpy(buffer, data, length);
   frame->len = length; frame->pts = pts; frame->seq = seq;
   frame->key = keyframe(data, length);
@@ -126,6 +146,7 @@ int pbs_h264_publish(const void *data, size_t length, uint32_t pts) {
     mkdir(REC_DIR, 0777);
     live.rec = fopen(path, "wb");
     live.rec_pending = 0;
+    live.rec_headers_pending = 0;
     live.rec_frames = live.rec_bytes = 0;
     live.rec_started = milliseconds();
     if (!live.rec || rec_headers(live.rec)) {
@@ -134,7 +155,15 @@ int pbs_h264_publish(const void *data, size_t length, uint32_t pts) {
       live.rec_error = 1;
     }
   }
-  if (live.rec) {
+  /* An encoder restart changes the elementary stream's decoding context.
+   * Do not append unreferenced P frames from the new session to a live file;
+   * wait for its first IDR and insert current SPS/PPS ahead of that IDR. */
+  if (live.rec && live.rec_headers_pending && frame->key) {
+    if (rec_headers(live.rec)) {
+      fclose(live.rec); live.rec = NULL; live.rec_error = 1;
+    } else live.rec_headers_pending = 0;
+  }
+  if (live.rec && !live.rec_headers_pending) {
     if (fwrite(data, 1, length, live.rec) != length || fflush(live.rec)) {
       fclose(live.rec); live.rec = NULL; live.rec_error = 1;
     } else { live.rec_frames++; live.rec_bytes += length; }
@@ -183,16 +212,25 @@ void pbs_h264_server_stop(void) {
   pthread_mutex_lock(&live.lock);
   live.running = 0;
   live.rec_pending = 0;
+  live.rec_headers_pending = 0;
   if (live.rec) { fclose(live.rec); live.rec = NULL; }
   if (live.listener >= 0) shutdown(live.listener, SHUT_RDWR);
+  /* The accept socket is not the only blocking descriptor: a client may be
+   * inside recv() on a partial HTTP header, or send() on a stalled viewer.
+   * Wake every owned worker before joining it. Worker descriptors are closed
+   * under this same mutex so fd reuse cannot redirect shutdown elsewhere. */
+  for (int i = 0; i < 16; ++i)
+    if (live.worker_active[i] && live.worker_fd[i] >= 0)
+      shutdown(live.worker_fd[i], SHUT_RDWR);
   pthread_cond_broadcast(&live.changed);
   pthread_mutex_unlock(&live.lock);
 }
 static void stream(int fd) {
+  HTTP_TRACE("stream entered\n");
   const char *header = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
-  if (send_all(fd, header, strlen(header))) return;
-  unsigned char *copy = malloc(FRAME_MAX + 8);
-  if (!copy) return;
+  if (send_all(fd, header, strlen(header))) { HTTP_TRACE("stream header send failed\n"); return; }
+  unsigned char *copy = NULL;
+  size_t capacity = 0;
   pthread_mutex_lock(&live.lock);
   uint64_t next = live.seq + 1;
   uint64_t generation = live.generation;
@@ -201,13 +239,17 @@ static void stream(int fd) {
   while (live.running && generation == live.generation) {
     int alive = 1;
     while (alive && live.running && next > live.seq) alive = wait_media(fd, generation, 0);
-    if (!alive || !live.running || generation != live.generation) break;
+    if (!alive || !live.running || generation != live.generation) { HTTP_TRACE("stream reader no longer alive\n"); break; }
     if (live.seq - next >= 6) { next = live.seq; synced = 0; live.key_request = 1; }
     frame_t *f = &live.frames[next % SLOTS];
     next++;
     if (f->seq != next - 1 || (!synced && !f->key)) continue;
     synced = 1;
     size_t size = f->len;
+    unsigned char *grown = pbs_video_grow(copy, capacity, size + 8);
+    if (!grown) { HTTP_TRACE("stream allocation failed\n"); break; }
+    copy = grown;
+    if (size + 8 > capacity) capacity = pbs_video_capacity(size + 8);
     uint32_t packet[2] = {htonl((uint32_t)size), htonl(f->pts)};
     memcpy(copy, packet, sizeof packet);
     memcpy(copy + sizeof packet, f->data, size);
@@ -217,7 +259,7 @@ static void stream(int fd) {
     if (error) break;
   }
   pthread_mutex_unlock(&live.lock);
-  free(copy);
+  pbs_video_free(copy, capacity);
 }
 static void audio_stream(int fd) {
   const char *header = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
@@ -262,8 +304,8 @@ static void rtp_stream(int fd, int port) {
   if (target.socket < 0) return;
   const char *header = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nConnection: close\r\n\r\nRTP\n";
   if (send_all(fd,header,strlen(header))) { close(target.socket); return; }
-  unsigned char *copy = malloc(FRAME_MAX + 264);
-  if (!copy) {close(target.socket);return;}
+  unsigned char *copy = NULL;
+  size_t capacity = 0;
   uint16_t sequence = 0;
   uint32_t ssrc = (uint32_t)(milliseconds() ^ (uint64_t)fd * 0x9e3779b9u);
   uint64_t heartbeat = milliseconds();
@@ -277,13 +319,20 @@ static void rtp_stream(int fd, int port) {
     if(live.seq-next>=6){next=live.seq;synced=0;live.key_request=1;}
     frame_t *frame=&live.frames[next++%SLOTS];
     if(frame->seq!=next-1 || (!synced && !frame->key))continue;
-    size_t prefix=0;
-    if(!synced){
-      const unsigned char start[4]={0,0,0,1};
-      memcpy(copy,start,4);memcpy(copy+4,live.sps,live.sps_len);prefix=4+live.sps_len;
-      memcpy(copy+prefix,start,4);memcpy(copy+prefix+4,live.pps,live.pps_len);prefix+=4+live.pps_len;
-    }
+    size_t prefix = synced ? 0 : 8 + live.sps_len + live.pps_len;
     synced=1; size_t size=frame->len+prefix; uint32_t pts=frame->pts;
+    unsigned char *grown = pbs_video_grow(copy, capacity, size);
+    if (!grown) break;
+    copy = grown;
+    if (size > capacity) capacity = pbs_video_capacity(size);
+    if (prefix) {
+      const unsigned char start[4] = {0, 0, 0, 1};
+      memcpy(copy, start, 4);
+      memcpy(copy + 4, live.sps, live.sps_len);
+      size_t pps_at = 4 + live.sps_len;
+      memcpy(copy + pps_at, start, 4);
+      memcpy(copy + pps_at + 4, live.pps, live.pps_len);
+    }
     memcpy(copy+prefix,frame->data,frame->len);
     pthread_mutex_unlock(&live.lock);
     int error=pbs_rtp_frame(copy,size,pts,ssrc,&sequence,rtp_send,&target);
@@ -292,16 +341,24 @@ static void rtp_stream(int fd, int port) {
     if(error)break;
   }
   pthread_mutex_unlock(&live.lock);
-  free(copy);close(target.socket);
+  pbs_video_free(copy, capacity);close(target.socket);
 }
 static void configuration(int fd) {
-  char sps[257], pps[257], body[768];
+  char sps[257], pps[257], body[1024], audio[160];
+#ifdef PBS_PS4
+  const char *platform = "PS4";
+#else
+  const char *platform = "PS5";
+#endif
   pthread_mutex_lock(&live.lock);
   for (size_t i = 0; i < live.sps_len; i++) snprintf(sps + i*2, 3, "%02x", live.sps[i]);
   for (size_t i = 0; i < live.pps_len; i++) snprintf(pps + i*2, 3, "%02x", live.pps[i]);
-  int n = snprintf(body, sizeof body, "{\"width\":%d,\"height\":%d,\"fps\":60,\"codec\":\"avc1.%02x%02x%02x\",\"sps\":\"%s\",\"pps\":\"%s\",\"audio\":{\"codec\":\"%s\",\"channels\":%d,\"rate\":%d,\"bits\":32}}", live.width, live.height, live.sps[1], live.sps[2], live.sps[3], sps, pps, live.audio_codec[0] ? live.audio_codec : "pcm_f32le", live.audio_channels, live.audio_rate);
+  if (!strcmp(live.audio_codec, "none")) snprintf(audio, sizeof audio, "null");
+  else snprintf(audio, sizeof audio, "{\"codec\":\"%s\",\"channels\":%d,\"rate\":%d,\"bits\":32}",
+      live.audio_codec[0] ? live.audio_codec : "pcm_f32le", live.audio_channels, live.audio_rate);
+  int n = snprintf(body, sizeof body, "{\"platform\":\"%s\",\"width\":%d,\"height\":%d,\"fps\":%d,\"codec\":\"avc1.%02x%02x%02x\",\"sps\":\"%s\",\"pps\":\"%s\",\"audio\":%s}", platform, live.width, live.height, live.fps, live.sps[1], live.sps[2], live.sps[3], sps, pps, audio);
   pthread_mutex_unlock(&live.lock);
-  reply(fd, "application/json", body, n);
+  if (n > 0 && (size_t)n < sizeof body) reply(fd, "application/json", body, (size_t)n);
 }
 static void status(int fd) {
   char body[768];
@@ -311,7 +368,7 @@ static void status(int fd) {
       live.width, live.height, (unsigned long long)live.seq, (unsigned long long)live.bytes, seconds > 0 ? live.seq/seconds : 0,
       seconds > 0 ? live.bytes*8/seconds/1000 : 0, live.clients, live.rec || live.rec_pending ? "true" : "false", live.rec_name,
       (unsigned long long)live.rec_frames, (unsigned long long)live.rec_bytes,
-      live.rec_frames/60.0, live.rec_error ? "true" : "false",
+      live.fps > 0 ? (double)live.rec_frames/live.fps : 0, live.rec_error ? "true" : "false",
       (unsigned long long)live.audio_chunks, (unsigned long long)live.audio_bytes,
       live.audio_started ? (double)live.audio_bytes * 8 / ((milliseconds() - live.audio_started) / 1000.0) / 1000 : 0,
       live.audio_codec[0] ? live.audio_codec : "pcm_f32le");
@@ -331,7 +388,7 @@ static void recordings(int fd) {
     struct dirent *entry;
     while ((entry = readdir(dir)) && used < sizeof body - 256) {
       if (!valid_recording_name(entry->d_name)) continue;
-      char path[192]; struct stat st;
+      char path[512]; struct stat st;
       snprintf(path, sizeof path, "%s/%s", REC_DIR, entry->d_name);
       if (stat(path, &st) || !S_ISREG(st.st_mode)) continue;
       used += snprintf(body + used, sizeof body - used, "%s{\"name\":\"%s\",\"bytes\":%llu}", used > 1 ? "," : "", entry->d_name, (unsigned long long)st.st_size);
@@ -343,7 +400,7 @@ static void recordings(int fd) {
 }
 static void download(int fd, const char *name) {
   if (!valid_recording_name(name)) return;
-  char path[192]; snprintf(path, sizeof path, "%s/%s", REC_DIR, name);
+  char path[512]; snprintf(path, sizeof path, "%s/%s", REC_DIR, name);
   FILE *file = fopen(path, "rb"); if (!file) return;
   struct stat st;
   if (fstat(fileno(file), &st)) { fclose(file); return; }
@@ -358,8 +415,10 @@ static void download(int fd, const char *name) {
   }
   fclose(file);
 }
+typedef struct { int fd, slot; } client_arg_t;
 static void *client_thread(void *arg) {
-  int fd = *(int *)arg; free(arg);
+  client_arg_t client = *(client_arg_t *)arg; free(arg);
+  int fd = client.fd;
   int media = 0;
   int no_delay = 1;
   setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &no_delay, sizeof no_delay);
@@ -367,14 +426,18 @@ static void *client_thread(void *arg) {
   setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &send_buffer, sizeof send_buffer);
   struct timeval timeout = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
-  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
+  struct timeval header_timeout = {1, 0};
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &header_timeout, sizeof header_timeout);
   char request[4096], method[12], path[256]; size_t used = 0;
-  while (used < sizeof request - 1) {
+  uint64_t header_started = milliseconds();
+  while (used < sizeof request - 1 && milliseconds() - header_started < 5000) {
     ssize_t got = recv(fd, request + used, sizeof request - used - 1, 0);
     if (got <= 0) goto done;
     used += got; request[used] = 0;
     if (strstr(request, "\r\n\r\n")) break;
   }
+  if (!strstr(request, "\r\n\r\n")) goto done;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
   if (sscanf(request, "%11s %255s", method, path) != 2) goto done;
   int rtp_port = 0, consumed = 0;
   if (sscanf(path, "/rtp/video?port=%d%n", &rtp_port, &consumed) != 1 || path[consumed] || rtp_port < 1024 || rtp_port > 65534) rtp_port = 0;
@@ -405,6 +468,7 @@ static void *client_thread(void *arg) {
   } else if (!strcmp(method, "POST") && !strcmp(path, "/record/stop")) {
     pthread_mutex_lock(&live.lock);
     live.rec_pending = 0;
+    live.rec_headers_pending = 0;
     if (live.rec) { fclose(live.rec); live.rec = NULL; }
     pthread_mutex_unlock(&live.lock);
     reply(fd, "application/json", "{}", 2);
@@ -419,8 +483,14 @@ static void *client_thread(void *arg) {
     pbs_h264_server_stop();
   } else reply(fd, "text/plain", "Unavailable route", 17);
 done:
+  pthread_mutex_lock(&live.lock);
+  /* Own close under the same lock as server_stop's shutdown loop; do not
+   * leave a stale numeric fd that another connection could have reused. */
   close(fd);
-  pthread_mutex_lock(&live.lock); live.clients--; if (media) live.media_clients--; pthread_mutex_unlock(&live.lock);
+  live.worker_fd[client.slot] = -1;
+  live.clients--; if (media) live.media_clients--;
+  live.worker_active[client.slot] = 0;
+  pthread_mutex_unlock(&live.lock);
   return NULL;
 }
 static void *accept_thread(void *arg) {
@@ -429,29 +499,56 @@ static void *accept_thread(void *arg) {
     int fd = accept(live.listener, NULL, NULL);
     if (fd < 0) { if (errno == EINTR) continue; break; }
     pthread_mutex_lock(&live.lock);
-    int allowed = live.clients < 16; /* reserve capacity for stop/config/status */
-    if (allowed) live.clients++;
+    int slot = -1;
+    for (int i = 0; i < 16; ++i) if (!live.worker_active[i]) { slot = i; break; }
+    int allowed = slot >= 0 && live.running;
+    if (allowed) { live.clients++; live.worker_active[slot] = 1; live.worker_fd[slot] = fd; }
     pthread_mutex_unlock(&live.lock);
     if (!allowed) { close(fd); continue; }
-    int *value = malloc(sizeof *value); pthread_t thread;
-    if (value) *value = fd;
-    if (!value || pthread_create(&thread, NULL, client_thread, value)) {
-      free(value); close(fd);
-      pthread_mutex_lock(&live.lock); live.clients--; pthread_mutex_unlock(&live.lock);
-    } else pthread_detach(thread);
+    if (live.worker_valid[slot]) { pthread_join(live.workers[slot], NULL); live.worker_valid[slot] = 0; }
+    client_arg_t *value = malloc(sizeof *value);
+    if (value) *value = (client_arg_t){fd, slot};
+    if (!value || pthread_create(&live.workers[slot], NULL, client_thread, value)) {
+      free(value);
+      pthread_mutex_lock(&live.lock);
+      close(fd); live.worker_fd[slot] = -1;
+      live.clients--; live.worker_active[slot] = 0;
+      pthread_mutex_unlock(&live.lock);
+    } else live.worker_valid[slot] = 1;
   }
-  close(live.listener);
+  pthread_mutex_lock(&live.lock);
+  int listener = live.listener;
+  live.listener = -1;
+  pthread_mutex_unlock(&live.lock);
+  if (listener >= 0) close(listener);
   return NULL;
 }
-int pbs_h264_server_start(int port, int width, int height, const unsigned char *sps, size_t sps_len,
-                           const unsigned char *pps, size_t pps_len) {
+void pbs_h264_server_wait(void) {
+  if (live.acceptor_valid) { pthread_join(live.acceptor, NULL); live.acceptor_valid = 0; }
+  for (int i = 0; i < 16; ++i) {
+    if (live.worker_valid[i]) { pthread_join(live.workers[i], NULL); live.worker_valid[i] = 0; }
+  }
+  for (int i = 0; i < SLOTS; ++i) {
+    pbs_video_free(live.frames[i].data, live.frames[i].capacity);
+    live.frames[i].data = NULL; live.frames[i].capacity = 0;
+  }
+  for (int i = 0; i < AUDIO_SLOTS; ++i) { free(live.audio[i].data); live.audio[i].data = NULL; }
+}
+int pbs_h264_server_start(int port, int width, int height, const unsigned char *sps,
+    size_t sps_len, const unsigned char *pps, size_t pps_len) {
+  return pbs_h264_server_start_at_rate(port, width, height, 60, sps, sps_len, pps, pps_len);
+}
+int pbs_h264_server_start_at_rate(int port, int width, int height, int fps,
+    const unsigned char *sps, size_t sps_len, const unsigned char *pps, size_t pps_len) {
+  if (fps != 30 && fps != 60) return -1;
   if (sps_len < 4 || sps_len > 128 || !pps_len || pps_len > 128 || port < 1 || port > 65535) return -1;
   pthread_mutex_lock(&live.lock);
   if (live.running) {
-    live.width = width; live.height = height;
+    live.width = width; live.height = height; live.fps = fps;
     memcpy(live.sps, sps, sps_len); live.sps_len = sps_len;
     memcpy(live.pps, pps, pps_len); live.pps_len = pps_len;
     live.generation++; live.key_request = 1;
+    if (live.rec) live.rec_headers_pending = 1;
     pthread_cond_broadcast(&live.changed);
     pthread_mutex_unlock(&live.lock);
     return 0;
@@ -464,11 +561,10 @@ int pbs_h264_server_start(int port, int width, int height, const unsigned char *
   struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = htonl(INADDR_ANY)};
   if (bind(fd, (struct sockaddr *)&addr, sizeof addr) || listen(fd, 8)) { close(fd); return -1; }
   live.listener = fd; live.running = 1; live.started = milliseconds();
-  live.width = width; live.height = height;
+  live.width = width; live.height = height; live.fps = fps;
   memcpy(live.sps, sps, sps_len); live.sps_len = sps_len;
   memcpy(live.pps, pps, pps_len); live.pps_len = pps_len;
-  pthread_t thread;
-  if (pthread_create(&thread, NULL, accept_thread, NULL)) { live.running = 0; close(fd); live.listener = -1; return -1; }
-  pthread_detach(thread);
+  if (pthread_create(&live.acceptor, NULL, accept_thread, NULL)) { live.running = 0; close(fd); live.listener = -1; return -1; }
+  live.acceptor_valid = 1;
   return 0;
 }

@@ -20,7 +20,8 @@ const H264Mux = (() => {
     const mdia=box('mdia',full('mdhd',0,0,u32(0),u32(0),u32(90000),u32(0),u16(0x55c4),u16(0)),full('hdlr',0,0,u32(0),str('vide'),zeros(12),str('PBS video\0')),minf);
     const trak=box('trak',full('tkhd',0,7,u32(0),u32(0),u32(1),u32(0),u32(0),zeros(8),u16(0),u16(0),u16(0),u16(0),matrix,u32(width*65536),u32(height*65536)),mdia);
     const mvhd=full('mvhd',0,0,u32(0),u32(0),u32(90000),u32(0),u32(0x10000),u16(0x100),zeros(10),matrix,zeros(24),u32(2));
-    const mvex=box('mvex',full('trex',0,0,u32(1),u32(1),u32(1500),u32(0),u32(0)));
+    const duration=Math.round(90000/(config.fps||60));
+    const mvex=box('mvex',full('trex',0,0,u32(1),u32(1),u32(duration),u32(0),u32(0)));
     return join(box('ftyp',str('isom'),u32(512),str('isomiso6avc1mp41')),box('moov',mvhd,trak,mvex));
   }
   function accessUnit(data) {
@@ -43,7 +44,7 @@ const H264Mux = (() => {
   }
   function fragment(sequence,pts,samples) {
     const mdat=box('mdat',...samples.map(s=>s.data));
-    const makeMoof=offset=>box('moof',full('mfhd',0,0,u32(sequence)),box('traf',full('tfhd',0,0x020000,u32(1)),full('tfdt',1,0,u32(Math.floor(pts/4294967296)),u32(pts)),full('trun',0,0x701,u32(samples.length),u32(offset),...samples.map(s=>join(u32(1500),u32(s.data.length),u32(s.key?0x02000000:0x01010000))))));
+    const makeMoof=offset=>box('moof',full('mfhd',0,0,u32(sequence)),box('traf',full('tfhd',0,0x020000,u32(1)),full('tfdt',1,0,u32(Math.floor(pts/4294967296)),u32(pts)),full('trun',0,0x701,u32(samples.length),u32(offset),...samples.map(s=>join(u32(s.duration||1500),u32(s.data.length),u32(s.key?0x02000000:0x01010000))))));
     const moof=makeMoof(0); return join(makeMoof(moof.length+8),mdat);
   }
   return {init,accessUnit,fragment};
