@@ -26,11 +26,13 @@ OUT = ROOT / "build" / "ps4-mock"
 def build(cc, probe_empty=False, fail_publish=False, source_barrier=False, native_wait=False,
           observe_open_slots=False):
     OUT.mkdir(parents=True, exist_ok=True)
+    subprocess.run([sys.executable, str(ROOT / "payload/embed_assets.py")], check=True)
     source = ROOT / "payload" / "src"
     flags = [cc, "-std=gnu11", "-O2", "-Wall", "-Wextra", "-pthread",
              "-DPBS_PS4_OBSERVE_REMOTEPLAY_STATUS=1", "-DPBS_PS4_OBSERVE_VIDEO_MODE=1",
              "-DPBS_PS4_OBSERVE_VIDEOOUT_BUS=1",
              "-I" + str(ROOT / "tests" / "stubs"), "-I" + str(source),
+             "-I" + str(ROOT / "payload/build/generated"),
              '-DPBS_PS4_DATA_ROOT="build/ps4-mock"']
     if probe_empty:
         flags.append("-DPBS_PS4_SMOKE_REOPEN_EMPTY=1")
@@ -42,12 +44,12 @@ def build(cc, probe_empty=False, fail_publish=False, source_barrier=False, nativ
         flags.append("-DPBS_PS4_READ_WAIT_EVENTS=1")
     if observe_open_slots:
         flags.append("-DPBS_PS4_TEST_OPEN_SLOTS=1")
-    subprocess.run(flags + ["-Dmain=pbs_ps4_entry", "-c", str(source / "ps4_main.c"),
+    subprocess.run(flags + ["-Dmain=pbs_ps4_entry", "-c", str(source / "platform/ps4/main.c"),
                             "-o", str(OUT / "entry.o")], cwd=ROOT, check=True)
     linking = ["-Wl,--wrap=pbs_h264_publish"] if fail_publish else []
     subprocess.run(flags + linking + [str(OUT / "entry.o"),
-                            str(ROOT / "tests" / "ps4_mock_avcap.c"),
-                            str(source / "h264_http.c"),
+                            str(ROOT / "tests" / "ps4/capture/mock_avcap.c"),
+                            str(source / "common/http/server.c"),
                             "-o", str(OUT / "mock-server")], cwd=ROOT, check=True)
 
 

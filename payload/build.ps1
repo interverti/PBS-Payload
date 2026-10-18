@@ -89,15 +89,18 @@ if ($Platform -eq 'PS4') {
 if ($Kind -ne 'stream') { throw 'The probe build is available for PS4 only.' }
 if (-not $SdkPath) { $SdkPath = $env:PS5_PAYLOAD_SDK }
 
+$generated = Join-Path $PSScriptRoot 'build/generated'
+New-Item -ItemType Directory -Force -Path $generated | Out-Null
+
 $viewer = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'web\h264.html') -Raw
 $muxer = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'web\h264-mux.js') -Raw
 $viewer = $viewer.Replace('/*PBS_MUX*/', $muxer)
 $escapedViewer = $viewer.Replace('\', '\\').Replace('"', '\"').Replace("`r", '').Replace("`n", '\n')
 $viewerHeader = '#pragma once' + "`n" + 'static const char PBS_H264_HTML[] = "' + $escapedViewer + '";' + "`n"
-[System.IO.File]::WriteAllText((Join-Path $PSScriptRoot 'src\h264_webui.h'), $viewerHeader, [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText((Join-Path $generated 'webui.h'), $viewerHeader, [System.Text.UTF8Encoding]::new($false))
 $bannerBytes = [System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'web\banner.png'))
 $bannerHeader = '#pragma once' + "`n" + 'static const unsigned char PBS_BANNER_BYTES[] = {' + ($bannerBytes -join ',') + '};' + "`n"
-[System.IO.File]::WriteAllText((Join-Path $PSScriptRoot 'src\h264_banner.h'), $bannerHeader, [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText((Join-Path $generated 'banner.h'), $bannerHeader, [System.Text.UTF8Encoding]::new($false))
 
 $candidates = @(
   $SdkPath,
@@ -124,7 +127,7 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $toolDir = if ($IsWindows -or $env:OS -eq 'Windows_NT') { Join-Path $sdk 'win' } else { Join-Path $sdk 'bin' }
 if (Test-Path $toolDir) { $env:PATH = "$toolDir;$env:PATH" }
 
-$sources = @('main.c', 'inject.c', 'h264_http.c') | ForEach-Object { Join-Path $PSScriptRoot ('src/' + $_) }
+$sources = @('platform/ps5/main.c', 'common/process/inject.c', 'common/http/server.c') | ForEach-Object { Join-Path $PSScriptRoot ('src/' + $_) }
 
 $kernelHeader = Join-Path $sdk 'target\include\ps5\kernel.h'
 $sdkDefines = @()
@@ -134,6 +137,7 @@ if ((Test-Path $kernelHeader) -and
   $sdkDefines += '-DPBS_UCRED_ATTRS_ARRAY'
 }
 
+$includeFlags = @('-I', (Join-Path $PSScriptRoot 'src'), '-I', $generated)
 $cflags = if ($Config -eq 'Debug') { @('-O0', '-g3') } else { @('-O2', '-g') }
 
 if ($SdkStyle) {
@@ -147,7 +151,7 @@ if ($SdkStyle) {
     '-fno-stack-protector', '-fno-plt', '-femulated-tls',
     '-lc', '-lkernel_web',
     '--end-no-unused-arguments'
-  ) + $cflags + $sdkDefines + @(
+  ) + $includeFlags + $cflags + $sdkDefines + @(
     '-Wall', '-Wextra', '-Wno-unused-parameter'
   ) + $sources + @(
     '-lSceRegMgr', '-lSceUserService', '-lSceRemoteplay', '-lSceSystemService',
@@ -168,7 +172,7 @@ if ($SdkStyle) {
     '-L', (Join-Path $sdk 'target\user\homebrew\lib'),
     '-fno-stack-protector', '-fno-plt', '-femulated-tls',
     '-nostartfiles'
-  ) + $cflags + $sdkDefines + @(
+  ) + $includeFlags + $cflags + $sdkDefines + @(
     '-Wall', '-Wextra', '-Wno-unused-parameter'
   ) + $sources + @(
     '-lc', '-lkernel_web',

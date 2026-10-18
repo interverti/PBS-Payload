@@ -3,8 +3,6 @@
 **/.gradle/
 **/.cxx/
 **/local.properties
-payload/src/h264_webui.h
-payload/src/h264_banner.h
 dist/
 notes/
 state/

@@ -15,21 +15,22 @@ case "$platform" in
   ps5) sdk=${PS5_PAYLOAD_SDK:?Set PS5_PAYLOAD_SDK}; compiler="$sdk/bin/prospero-clang" ;;
   *) echo 'Usage: build.sh ps4|ps5 [stream|probe]' >&2; exit 2 ;;
 esac
+includes=(-I"$root/src" -I"$root/build/generated")
 out="$root/build/$platform"
 mkdir -p "$out"
 if [[ ${PBS_PS4_WORKER_PROBE:-0} == 1 && $kind == smoke && $platform == ps4 ]]; then
   kind=worker-probe
 fi
 if [[ $kind == worker-probe && $platform == ps4 ]]; then
-  "$compiler" -O2 "${debug_flags[@]}" -Wall -Wextra -Wno-unused-parameter -DPBS_PS4 \
-    "$root/src/ps4_worker_probe_main.c" "$root/src/ps4_worker_probe.c" \
-    "$root/src/ps4_worker_boot.c" "$root/src/ps4_worker.c" \
-    "$root/src/ps4_worker_remote.c" "$root/src/inject.c" \
-    "$root/src/ps4_cred.c" "$root/src/ps4_control.c" \
+  "$compiler" "${includes[@]}" -O2 "${debug_flags[@]}" -Wall -Wextra -Wno-unused-parameter -DPBS_PS4 \
+    "$root/src/platform/ps4/diagnostics/worker_probe_main.c" "$root/src/platform/ps4/diagnostics/worker_probe.c" \
+    "$root/src/platform/ps4/worker/boot.c" "$root/src/platform/ps4/worker/client.c" \
+    "$root/src/platform/ps4/worker/remote.c" "$root/src/common/process/inject.c" \
+    "$root/src/platform/ps4/system/credentials.c" "$root/src/platform/ps4/system/control.c" \
     -o "$out/pbs-worker-probe.elf"
   python3 "$root/../tools/verify_ps4_worker_blob.py" "$out/pbs-worker-probe.elf"
 elif [[ $kind == probe && $platform == ps4 ]]; then
-  "$compiler" -O2 "${debug_flags[@]}" -Wall -Wextra -Werror "$root/src/ps4_probe.c" -o "$out/pbs-probe.elf"
+  "$compiler" "${includes[@]}" -O2 "${debug_flags[@]}" -Wall -Wextra -Werror "$root/src/platform/ps4/diagnostics/probe.c" -o "$out/pbs-probe.elf"
 elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
   python3 "$root/embed_assets.py"
   if [[ $platform == ps4 ]]; then
@@ -183,19 +184,19 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
     defines+=("-DPBS_PS4_CAPTURE_HEIGHT=$capture_height" "-DPBS_PS4_CAPTURE_FPS=$capture_fps" "-DPBS_PS4_REMOTE_REQUEST=$remote_request")
     defines+=("-DPBS_PS4_REMOTE_IDLE_RUN=$idle_run")
     defines+=("-DPBS_PS4_WORKER_BOOT=$worker_boot")
-    sources=("$root/src/ps4_main.c" "$root/src/ps4_capture.c")
+    sources=("$root/src/platform/ps4/main.c" "$root/src/platform/ps4/capture/capture.c")
     if [[ $remote_avcap == 1 ]]; then
-      sources+=("$root/src/ps4_remote_capture.c" "$root/src/ps4_worker.c" "$root/src/ps4_worker_remote.c" "$root/src/ps4_worker_boot.c")
+      sources+=("$root/src/platform/ps4/capture/remote.c" "$root/src/platform/ps4/worker/client.c" "$root/src/platform/ps4/worker/remote.c" "$root/src/platform/ps4/worker/boot.c")
     fi
-    sources+=("$root/src/ps4_control.c" "$root/src/inject.c" "$root/src/h264_http.c" "$root/src/ps4_cred.c")
+    sources+=("$root/src/platform/ps4/system/control.c" "$root/src/common/process/inject.c" "$root/src/common/http/server.c" "$root/src/platform/ps4/system/credentials.c")
     if [[ $admission_probe == 1 || $low_memory == 1 || $encoder_state == 1 ]]; then
-      sources+=("$root/src/ps4_snapshot.c" "$root/src/ps4_admission.c")
+      sources+=("$root/src/platform/ps4/diagnostics/snapshot.c" "$root/src/platform/ps4/diagnostics/admission.c")
     fi
-    if [[ $latch_bypass == 1 || $budget_unlock == 1 || $native_source == 1 ]]; then sources+=("$root/src/ps4_latch_patch.c"); fi
-    if [[ $venc_journal == 1 ]]; then sources+=("$root/src/ps4_venc_journal.c"); fi
-    if [[ $daemon_dump == 1 ]]; then sources+=("$root/src/ps4_daemon_dump.c"); fi
+    if [[ $latch_bypass == 1 || $budget_unlock == 1 || $native_source == 1 ]]; then sources+=("$root/src/platform/ps4/diagnostics/latch_patch.c"); fi
+    if [[ $venc_journal == 1 ]]; then sources+=("$root/src/platform/ps4/diagnostics/venc_journal.c"); fi
+    if [[ $daemon_dump == 1 ]]; then sources+=("$root/src/platform/ps4/diagnostics/daemon_dump.c"); fi
   else
-    sources=("$root/src/main.c" "$root/src/inject.c" "$root/src/h264_http.c")
+    sources=("$root/src/platform/ps5/main.c" "$root/src/common/process/inject.c" "$root/src/common/http/server.c")
     defines=()
   fi
   filename=pbs.elf
@@ -292,7 +293,7 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
   if [[ $platform == ps4 && $native_source == 1 ]]; then
     filename=${filename%.elf}-nativesource.elf
   fi
-  "$compiler" "$optimization" "${debug_flags[@]}" -Wall -Wextra -Wno-unused-parameter "${defines[@]}" "${sources[@]}" -o "$out/$filename"
+  "$compiler" "${includes[@]}" "$optimization" "${debug_flags[@]}" -Wall -Wextra -Wno-unused-parameter "${defines[@]}" "${sources[@]}" -o "$out/$filename"
   if [[ $platform == ps4 && $remote_avcap == 1 ]]; then
     python3 "$root/../tools/verify_ps4_worker_blob.py" "$out/$filename"
   fi
