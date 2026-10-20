@@ -384,12 +384,15 @@ capture_free:
 /* Production entry point: exported capture APIs and caller-owned handles. */
 int main(int argc, char **argv) {
   const char *mode = argc > 1 ? argv[1] : "avserve";
-  if (strcmp(mode, "avserve")) { notify("PBS: use avserve [720p|1080p|1440p] [bitrate=N] [minqp=N] [noaudio] [port]"); return 1; }
+  if (strcmp(mode, "avserve")) { notify("PBS: use avserve [720p|1080p|1440p] [bitrate=N] [minqp=N] [norate] [noaudio] [port]"); return 1; }
   char *serve_args[] = {argv[0], "avopenfast", "SceRemotePlay", "grant", "11", "2", "0", "8080", "2560", "1440", "1"};
   int audio_mode = 2;
   if (!strcmp(mode, "avserve")) {
     live_request = 1;
     native_rate_config = 1;
+#ifdef PBS_PS5_NO_NATIVE_RATE_DEFAULT
+    native_rate_config = 0;
+#endif
     requested_min_qp = 18;
     requested_video_bitrate = 60000000;
     for (int i = 2; i < argc; i++) {
@@ -403,6 +406,8 @@ int main(int argc, char **argv) {
         unsigned long qp = strtoul(argv[i] + 6, &end, 10);
         if (!end || *end || qp < 18 || qp > 35) return 1;
         requested_min_qp = (uint32_t)qp;
+      } else if (!strcmp(argv[i], "norate")) {
+        native_rate_config = 0;
       }
     }
     requested_video_budget = requested_video_bitrate;
@@ -410,6 +415,7 @@ int main(int argc, char **argv) {
     for (int i = 2; i < argc; i++) {
       if (!strncmp(argv[i], "bitrate=", 8)) continue;
       if (!strncmp(argv[i], "minqp=", 6)) continue;
+      if (!strcmp(argv[i], "norate")) continue;
       if (!strcmp(argv[i], "noaudio")) { audio_mode = 0; continue; }
       if (!strcmp(argv[i], "720p")) { serve_args[4] = "12"; serve_args[8] = "1280"; serve_args[9] = "720"; continue; }
       if (!strcmp(argv[i], "1080p")) { serve_args[4] = "12"; serve_args[8] = "1920"; serve_args[9] = "1080"; continue; }
@@ -443,6 +449,7 @@ int main(int argc, char **argv) {
         !strcmp(mode, "avopenfast") ? pbs_inject_call_fast : pbs_inject_call;
 avopen_retry:;
     if(live_request)live_start_attempts++;
+    int clean_open_rejection = 0;
     FILE *f = open_report("inject.txt", "a");
     if (!f) return 1;
     fprintf(f, "%s %s %s\n", mode, argv[2], how);
@@ -500,8 +507,6 @@ avopen_retry:;
       param_u32(params, 0x2a4, 0x6e);
       fprintf(f, "Params size=0x2b0 feature=%u usage=%u %dx%d fps-mode=%u\n", feature, usage, width, height, fps_mode);
     }
-    pbs_inject_write(&ctx, scratch_zero, 0x800);
-
     intptr_t fn_init = pbs_resolve_in(ctx.pid, "libSceAvcap2.sprx", "sceAvcap2Initialize");
     intptr_t fn_open = pbs_resolve_in(ctx.pid, "libSceAvcap2.sprx", "sceAvcap2OpenVideo");
     intptr_t fn_oaudio = pbs_resolve_in(ctx.pid, "libSceAvcap2.sprx", "sceAvcap2OpenAudio");
@@ -509,6 +514,10 @@ avopen_retry:;
     intptr_t fn_clear = 0;
     uint32_t grant_feature = 0;
     int granted_callback = 0;
+    if (pbs_inject_write(&ctx, scratch_zero, 0x800)) {
+      fprintf(f, "initial capture parameters could not be written\n");
+      goto avopen_cleanup;
+    }
     if (!strcmp(how, "tinit") && fn_term) {
       long tr = call(&ctx, fn_term, (uint64_t[6]){0, 0, 0, 0, 0, 0});
       fprintf(f, "Terminate() -> %s\n", fmt_rc(tr));
@@ -557,7 +566,10 @@ avopen_retry:;
       }
       /* Params+0x280 must match the current video output mode, read immediately before OpenVideo. */
       memcpy(scratch_zero + 8 + 0x280, &video_mode, sizeof video_mode);
-      pbs_inject_write(&ctx, scratch_zero, 0x800);
+      if (pbs_inject_write(&ctx, scratch_zero, 0x800)) {
+        fprintf(f, "video output mode could not be written\n");
+        goto avopen_cleanup;
+      }
       fprintf(f, "Params videoOutMode=0x%x\n", video_mode);
     }
     long rc = fn_open ? call(&ctx, fn_open,
@@ -573,6 +585,7 @@ avopen_retry:;
       uint64_t h = 0;
       memcpy(&h, hb, 8);
       fprintf(f, "handle=0x%llx\n", (unsigned long long)h);
+      clean_open_rejection = rc != LONG_MIN && (int32_t)(uint32_t)rc < 0 && !h && !ctx.asserted;
       if (!strcmp(mode, "avopenfast") && rc != LONG_MIN &&
           (int32_t)(uint32_t)rc >= 0 && h) {
         if (argc > 6) capture_stream(f, &ctx, h, atoi(argv[6]), argc > 7 ? atoi(argv[7]) : 8080, width, height, audio_mode);
@@ -581,18 +594,24 @@ avopen_retry:;
             (uint64_t[6]){h, 0, 0, 0, 0, 0})));
       }
     }
-avopen_cleanup:
-    if (granted_callback && !ctx.asserted) fprintf(f, "ClearCallback(%u) -> %s\n", grant_feature,
-        fmt_rc(call(&ctx, fn_clear, (uint64_t[6]){grant_feature, 0, 0, 0, 0, 0})));
+avopen_cleanup:;
+    int clear_ok = !granted_callback;
+    if (granted_callback && !ctx.asserted) {
+      long clear_rc = call(&ctx, fn_clear, (uint64_t[6]){grant_feature, 0, 0, 0, 0, 0});
+      fprintf(f, "ClearCallback(%u) -> %s\n", grant_feature, fmt_rc(clear_rc));
+      clear_ok = clear_rc != LONG_MIN && (int32_t)(uint32_t)clear_rc >= 0;
+    }
     pbs_inject_end(&ctx);
     fclose(f);
-    if (live_request && !ctx.asserted && (pbs_h264_server_running() || (!live_server_started && live_start_attempts < 6))) {
+    int retry_start = !clean_open_rejection && clear_ok &&
+        !live_server_started && live_start_attempts < 6;
+    if (live_request && clear_ok && !ctx.asserted && (pbs_h264_server_running() || retry_start)) {
       usleep(250000);
-      if (pbs_h264_server_running() || (!live_server_started && live_start_attempts < 6)) goto avopen_retry;
+      if (pbs_h264_server_running() || retry_start) goto avopen_retry;
     }
     if (live_request) { pbs_h264_server_stop(); pbs_h264_server_wait(); }
-    notify("PBS: streaming stopped");
-    return 0;
+    notify(live_server_started ? "PBS: streaming stopped" : "PBS: capture unavailable");
+    return live_server_started ? 0 : 1;
   }
 
   return 1;

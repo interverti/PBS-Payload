@@ -31,7 +31,8 @@ param(
   [ValidateSet(-1, 0, 1)][int]$Ps4WorkerBoot = -1,
   [ValidateRange(1, 3600)][int]$Ps4CaptureSeconds = 10,
   [switch]$SdkStyle,
-  [switch]$TesterRelease
+  [switch]$TesterRelease,
+  [switch]$Ps5NoNativeRateDefault
 )
 
 $ErrorActionPreference = 'Stop'
@@ -132,6 +133,7 @@ $sources = @('platform/ps5/main.c', 'common/process/inject.c', 'common/http/serv
 $kernelHeader = Join-Path $sdk 'target\include\ps5\kernel.h'
 $sdkDefines = @()
 if($TesterRelease){$sdkDefines += '-DPBS_TESTER_RELEASE'}
+if($Ps5NoNativeRateDefault){$sdkDefines += '-DPBS_PS5_NO_NATIVE_RATE_DEFAULT'}
 if ((Test-Path $kernelHeader) -and
     ((Get-Content -LiteralPath $kernelHeader -Raw) -match 'kernel_get_ucred_attrs\s*\(\s*pid_t\s+pid\s*,\s*uint8_t')) {
   $sdkDefines += '-DPBS_UCRED_ATTRS_ARRAY'
