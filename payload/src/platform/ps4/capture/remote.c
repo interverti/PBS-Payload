@@ -8,7 +8,8 @@
  * to SceRemotePlay, executes the same ABI calls there, and copies the
  * produced Annex B access units into the payload for HTTP/RTP.
  *
- * Frame transport uses the Avcap client's already-mapped ring buffer. The
+ * Worker builds use exported ReadVideo with a private destination buffer.
+ * Legacy ptrace experiments use the Avcap client's already-mapped ring. The
  * internal dequeue helper returns the payload pointer and length; PBS copies
  * that payload with PT_IO and then consumes the ring entry. This avoids
  * calling malloc/mmap in a stopped SceRemotePlay thread (both can block on
@@ -23,7 +24,17 @@
 #include "common/process/inject.h"
 #include "platform/ps4/system/control.h"
 #include "platform/ps4/capture/request.h"
+/* build.sh selects the exported route for worker builds. Keep the default
+ * here for standalone legacy diagnostics and their private-ABI fault models. */
+#ifndef PBS_PS4_EXPORTED_READ
+#define PBS_PS4_EXPORTED_READ 0
+#endif
+#if PBS_PS4_EXPORTED_READ
+#include "platform/ps4/capture/export_reader.h"
+static pbs_ps4_export_reader export_reader;
+#else
 #include "platform/ps4/capture/ring.h"
+#endif
 #if PBS_PS4_ADMISSION_PROBE || PBS_PS4_REMOTE_1080
 #include "platform/ps4/diagnostics/admission.h"
 #endif
@@ -336,17 +347,26 @@ int pbs_ps4_remote_capture_init(void) {
   }
   fprintf(report, "Remote Avcap idle-run: native usleep(10000), no SIGSTOP/reattach\n");
 #endif
-#if PBS_PS4_REMOTE_RING_COPY
+#if PBS_PS4_EXPORTED_READ
+  fprintf(report, "Remote Avcap reader: exported ReadVideo, opaque handle, nonblocking worker\n");
+  if (pbs_ps4_export_reader_init(&export_reader, &ctx)) {
+    fprintf(report, "Remote Avcap exported reader unavailable\n");
+    pbs_ps4_remote_capture_end();
+    return -1;
+  }
+#elif PBS_PS4_REMOTE_RING_COPY
   fprintf(report, "Remote Avcap reader: direct mapped ring, no dequeue/consume RPC\n");
 #endif
 #ifdef PBS_PS4
   if (ctx.trap <= 0) ctx.trap = pbs_ps4_firmware_trap(ctx.firmware, fn_init);
 #endif
+#if !PBS_PS4_EXPORTED_READ
   fprintf(report, "Remote Avcap client pid=%d scratch=%p dequeue=%p consume=%p trap=%p kernel=%p-%p\n",
           (int)ctx.pid, target_ptr(ctx.scratch),
           target_ptr(fn_init + ctx.firmware->dequeue_delta),
           target_ptr(fn_init + ctx.firmware->consume_delta),
           target_ptr(ctx.trap), (void *)ctx.kbase, (void *)ctx.kend);
+#endif
   /* Read-only native-class diagnostics. The local client and the RemotePlay
    * client are admitted by different service classes on FW11; these values
    * must be compared with the local probes in capture.txt. */
@@ -386,6 +406,9 @@ int pbs_ps4_remote_capture_init(void) {
 int pbs_ps4_remote_capture_end(void) {
   if (!attached) return 0;
   int failed = 0;
+#if PBS_PS4_EXPORTED_READ
+  if (pbs_ps4_export_reader_release(&export_reader, &ctx)) failed = -1;
+#endif
 #if PBS_PS4_LATCH_BYPASS || PBS_PS4_NATIVE_SOURCE
   if (pbs_ps4_latch_patch_restore(report)) failed = -1;
 #endif
@@ -422,6 +445,11 @@ int pbs_ps4_remote_capture_end(void) {
  * It is safe (GetStaticInfo only) and returns 0x80a70008 while the service
  * class is not ready. PBS never writes the readiness word. */
 static void wait_native_ready(unsigned profile) {
+#if PBS_PS4_EXPORTED_READ
+  /* OpenVideoEx below already retries the service-not-ready result with a
+   * deadline. Do not call an unexported helper via an Init-relative delta. */
+  (void)profile;
+#else
   const intptr_t ready = fn_init ? fn_init + ctx.firmware->ready_delta : 0;
   if (!remote_ready() || !ready) return;
   unsigned char desc[0x10];
@@ -452,6 +480,7 @@ static void wait_native_ready(unsigned profile) {
   fprintf(report, "Remote Avcap readiness profile=%u -> %08x retries=%u elapsed_ms=%llu\n",
           profile, (unsigned)rc, tries,
           (unsigned long long)(milliseconds() - began));
+#endif
 }
 
 /* PS4 SDK module helper. Declared here instead of including <ps4/kernel.h>
@@ -833,13 +862,19 @@ int pbs_ps4_remote_close(void *handle) {
                                         (uint64_t[6]){(uint64_t)handle, 0, 0, 0, 0, 0}));
 }
 
-/* The public ReadVideo performs: internal dequeue -> memcpy(payload) ->
+/* Worker reader: exported ReadVideo owns the handle/ring implementation.
+ * Legacy reader: internal dequeue -> memcpy(payload) ->
  * consume. Calling the two internal helpers directly gives us the mapped
  * payload pointer, so the payload process can copy it with PT_IO without
  * requiring a destination buffer in the stopped target process. The flags
  * argument is retained for the caller's ABI; PBS only uses the nonblocking
  * ring probe contract. */
-#if !PBS_PS4_REMOTE_RING_COPY
+#if PBS_PS4_EXPORTED_READ
+int pbs_ps4_remote_read(void *handle, void *out, size_t size, void *info, int flags) {
+  if (!remote_ready()) return -1;
+  return pbs_ps4_export_reader_read(&export_reader, &ctx, handle, out, size, info, flags);
+}
+#elif !PBS_PS4_REMOTE_RING_COPY
 int pbs_ps4_remote_read(void *handle, void *out, size_t size, void *info, int flags) {
   (void)flags;
   int result = -1;

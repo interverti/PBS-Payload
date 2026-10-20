@@ -14,6 +14,10 @@ run() {
   "$out/$name"
 }
 run firmware tests/ps4/system/firmware.c
+run layout tests/ps4/system/layout.c payload/src/platform/ps4/system/layout.c
+run layout-runtime -DPBS_PS4_DYNAMIC_LAYOUT=1 -DPBS_TEST_CONTROL -DKERNEL_IMAGE_SIZE=0x100000 tests/ps4/system/layout_runtime.c payload/src/platform/ps4/system/layout_runtime.c
+run export-reader tests/ps4/capture/export_reader.c payload/src/platform/ps4/capture/export_reader.c
+run remote-exported -DPBS_PS4 -DPBS_PS4_REMOTE_AVCAP=1 -DPBS_PS4_WORKER_BOOT=1 -DPBS_PS4_EXPORTED_READ=1 tests/ps4/capture/remote_exported.c payload/src/platform/ps4/capture/remote.c payload/src/platform/ps4/capture/export_reader.c
 run snapshot -DPBS_PS4 tests/ps4/diagnostics/snapshot.c payload/src/platform/ps4/diagnostics/snapshot.c
 run admission -DPBS_PS4 -DPBS_TEST_CONTROL tests/ps4/diagnostics/admission.c payload/src/platform/ps4/diagnostics/admission.c
 run encoder-snapshot -DPBS_PS4 -DPBS_TEST_CONTROL tests/ps4/diagnostics/encoder_snapshot.c payload/src/platform/ps4/diagnostics/admission.c

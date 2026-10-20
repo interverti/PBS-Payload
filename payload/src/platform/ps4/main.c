@@ -275,11 +275,15 @@ int main(int argc, char **argv) {
           PBS_PS4_CAPTURE_USAGE, PBS_PS4_IMAGE_PASTE);
   const pbs_ps4_firmware *firmware = pbs_ps4_firmware_find(kernel_get_fw_version());
   if (!firmware) {
-    fprintf(log, "Unsupported PS4 firmware; no capture or kernel patches attempted\n");
+    fprintf(log, "PS4 kernel layout unavailable or unsupported; no capture or kernel patches attempted\n");
     fclose(log);
     return 1;
   }
   fprintf(log, "Capture ABI profile: %s\n", firmware->name);
+#if PBS_PS4_DYNAMIC_LAYOUT
+  fprintf(log,"Runtime layout: acmgr=+%x gates=+%x,+%x (ELF/code discovery, no firmware offset table)\n",
+          firmware->acmgr_offset,firmware->gates[0].offset,firmware->gates[1].offset);
+#endif
   fprintf(log, "ReadVideo flags=%d (%s), native-wait-event path=%s\n",
           PBS_PS4_READ_WAIT_EVENTS ? 0 : 1,
           PBS_PS4_READ_WAIT_EVENTS ? "native wait, non-cancellable" : "nonblocking ring probe",

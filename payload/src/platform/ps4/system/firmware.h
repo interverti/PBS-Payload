@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-/* Private kernel/module layouts belong here, never in transport or lifecycle.
- * A profile is evidence of support, not a guess from a nearby firmware number.
- * Export resolution remains dynamic; all kernel patch bytes are checked before
- * the first write. Add another profile only with matching ABI evidence/tests. */
+/* Normal worker builds discover gate addresses at runtime and exclude the
+ * legacy table below. Explicit firmware diagnostics retain their measured
+ * private ABI. Every kernel patch is checked before the first write. */
 #include <stdint.h>
 #include <stddef.h>
 
@@ -37,6 +36,8 @@ typedef struct pbs_ps4_firmware {
   pbs_ps4_text_site capture_latch_sites[PBS_PS4_LATCH_SITE_COUNT]; /* experimental Open-only patch */
 } pbs_ps4_firmware;
 
+#if !PBS_PS4_DYNAMIC_LAYOUT
+/* Legacy diagnostic ABI only. Normal worker builds exclude this table. */
 static const pbs_ps4_firmware pbs_ps4_fw_1100 = {
   .name = "PS4 11.00 / Avcap ABI v1",
   .version = 0x11000000u, .version_mask = 0xffff0000u,
@@ -71,11 +72,19 @@ static inline const pbs_ps4_firmware *pbs_ps4_firmware_find(uint32_t version) {
   const pbs_ps4_firmware *p = &pbs_ps4_fw_1100;
   return (version & p->version_mask) == p->version ? p : NULL;
 }
+#else
+const pbs_ps4_firmware *pbs_ps4_firmware_find(uint32_t version);
+#endif
 
 static inline intptr_t pbs_ps4_firmware_trap(const pbs_ps4_firmware *p,
                                             intptr_t init) {
+#if PBS_PS4_DYNAMIC_LAYOUT
+  (void)p; (void)init;
+  return 0; /* Must be discovered from live import stubs, never guessed. */
+#else
   if (!p || init <= (intptr_t)p->avcap_init_offset ||
       init - (intptr_t)p->avcap_init_offset > INTPTR_MAX - p->avcap_trap_offset)
     return 0;
   return init - (intptr_t)p->avcap_init_offset + p->avcap_trap_offset;
+#endif
 }

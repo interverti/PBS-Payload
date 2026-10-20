@@ -48,12 +48,9 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
     capture_usage=${PBS_PS4_CAPTURE_USAGE:-0}
     image_paste=${PBS_PS4_IMAGE_PASTE:-0}
     read_wait=${PBS_PS4_READ_WAIT_EVENTS:-0}
-    # The local libSceAvcap client is admitted as a different FW11 client
-    # class and cannot open an encoder. Smoke defaults to the native-class
-    # injected backend; production keeps the local backend until hardware
-    # validation is complete. Set PBS_PS4_REMOTE_AVCAP=0/1 explicitly to
-    # override either build.
-    if [[ $kind == smoke && $capture_usage == 0 ]]; then
+    # The supported stream path uses the worker and runtime-discovered layout.
+    # Keep the local client available only for bounded diagnostic smokes.
+    if [[ $kind == stream || ( $kind == smoke && $capture_usage == 0 ) ]]; then
       remote_avcap=${PBS_PS4_REMOTE_AVCAP:-1}
     else
       remote_avcap=${PBS_PS4_REMOTE_AVCAP:-0}
@@ -79,6 +76,9 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
     fi
     if [[ $worker_boot == 1 && $remote_avcap != 1 ]]; then
       echo 'PBS_PS4_WORKER_BOOT=1 requires PBS_PS4_REMOTE_AVCAP=1' >&2; exit 2
+    fi
+    if [[ $worker_boot == 1 && $read_wait == 1 ]]; then
+      echo 'Exported worker ReadVideo requires nonblocking reads; disable PBS_PS4_READ_WAIT_EVENTS' >&2; exit 2
     fi
     if [[ $kind == stream && $remote_avcap == 1 && $worker_boot != 1 ]]; then
       echo 'Remote streaming requires the dedicated worker; use smoke for ptrace experiments' >&2; exit 2
@@ -184,11 +184,22 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
     defines+=("-DPBS_PS4_CAPTURE_HEIGHT=$capture_height" "-DPBS_PS4_CAPTURE_FPS=$capture_fps" "-DPBS_PS4_REMOTE_REQUEST=$remote_request")
     defines+=("-DPBS_PS4_REMOTE_IDLE_RUN=$idle_run")
     defines+=("-DPBS_PS4_WORKER_BOOT=$worker_boot")
+    # Running worker uses exported ReadVideo; no private ring/readiness ABI.
+    defines+=("-DPBS_PS4_EXPORTED_READ=$worker_boot")
+    dynamic_layout=$worker_boot
+    # Firmware-specific diagnostic experiments remain in their explicit ABI.
+    if [[ $admission_probe == 1 || $latch_bypass == 1 || $budget_unlock == 1 || $low_memory == 1 || $encoder_state == 1 || $venc_journal == 1 || $native_source == 1 || $daemon_dump == 1 ]]; then dynamic_layout=0; fi
+    defines+=("-DPBS_PS4_DYNAMIC_LAYOUT=$dynamic_layout")
+    if [[ $kind == stream && $dynamic_layout != 1 ]]; then
+      echo 'PS4 stream requires runtime layout discovery; legacy firmware offsets are diagnostic-only' >&2; exit 2
+    fi
     sources=("$root/src/platform/ps4/main.c" "$root/src/platform/ps4/capture/capture.c")
     if [[ $remote_avcap == 1 ]]; then
       sources+=("$root/src/platform/ps4/capture/remote.c" "$root/src/platform/ps4/worker/client.c" "$root/src/platform/ps4/worker/remote.c" "$root/src/platform/ps4/worker/boot.c")
+      if [[ $worker_boot == 1 ]]; then sources+=("$root/src/platform/ps4/capture/export_reader.c"); fi
     fi
     sources+=("$root/src/platform/ps4/system/control.c" "$root/src/common/process/inject.c" "$root/src/common/http/server.c" "$root/src/platform/ps4/system/credentials.c")
+    if [[ $dynamic_layout == 1 ]]; then sources+=("$root/src/platform/ps4/system/layout.c" "$root/src/platform/ps4/system/layout_runtime.c"); fi
     if [[ $admission_probe == 1 || $low_memory == 1 || $encoder_state == 1 ]]; then
       sources+=("$root/src/platform/ps4/diagnostics/snapshot.c" "$root/src/platform/ps4/diagnostics/admission.c")
     fi

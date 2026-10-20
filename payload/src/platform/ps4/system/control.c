@@ -3,6 +3,12 @@
  * PS4 11.00 gate sites follow MemDBG (SeregonWar, GPL-3.0-or-later). */
 #include "platform/ps4/system/control.h"
 #include "common/process/inject.h"
+#if PBS_PS4_DYNAMIC_LAYOUT
+#include "platform/ps4/system/layout.h"
+static int layout_read_target(void *opaque, uint64_t at, void *out, size_t size) {
+  return pbs_inject_read_at((pbs_inject_t *)opaque,(intptr_t)at,out,size);
+}
+#endif
 #if PBS_PS4_WORKER_BOOT
 #include "platform/ps4/worker/boot.h"
 #endif
@@ -193,7 +199,16 @@ int pbs_ps4_control(FILE *log, int enable, int *request_active) {
   /* Entry for the FP-preserving trampoline in validated import padding.
    * The injector restores every changed padding slot before returning;
    * import JMPs remain untouched. A current-RIP trap is not a safe fallback. */
+#if PBS_PS4_DYNAMIC_LAYOUT
+  if (!ctx->trap && !ctx->worker)
+    ctx->trap = pbs_ps4_layout_trap(layout_read_target,ctx,init);
+  if (!ctx->trap) {
+    fprintf(log,"RemotePlay import-padding discovery failed; no remote call attempted\n");
+    goto done;
+  }
+#else
   ctx->trap = pbs_ps4_firmware_trap(fw, init);
+#endif
   fprintf(log, "RemotePlay call entry=%p (libSceAvcap padding; tracee x87/SSE/AVX preservation)\n", (void *)ctx->trap);
   fprintf(log, "PS4 ptrace uses inherited loader credentials; no authid/caps writes\n");
 #endif

@@ -636,6 +636,7 @@ fast_cleanup:
 }
 
 long pbs_inject_call_fast(pbs_inject_t *ctx, intptr_t fn, const uint64_t args[6]) {
+  if (!ctx || ctx->asserted) return PBS_CALL_TIMEOUT;
   if (worker_call_hook) return worker_call_hook(fn, args);
   return pb_call_fast(ctx, fn, args, NULL);
 }

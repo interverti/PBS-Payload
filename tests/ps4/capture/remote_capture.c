@@ -65,6 +65,9 @@ static int fail_metadata;
 static intptr_t mutate_after_read_address, mutate_header_address;
 static int native_module_enabled = 1;
 static intptr_t seen_trap;
+#if PBS_PS4_EXPORTED_READ
+static int exported_reads, exported_frees;
+#endif
 
 static void setup_native_module(void) {
   uint64_t vtable = RP_VTABLE;
@@ -91,6 +94,13 @@ static void reset_counters(void) {
 static pbs_inject_t control_ctx_stub;
 pbs_inject_t *pbs_ps4_control_ctx(void) {
   control_ctx_stub.firmware = pbs_ps4_firmware_find(0x11008001u);
+#if PBS_PS4_EXPORTED_READ
+  static pbs_ps4_firmware opaque_profile;
+  opaque_profile = *control_ctx_stub.firmware;
+  opaque_profile.ready_delta = opaque_profile.dequeue_delta =
+      opaque_profile.consume_delta = opaque_profile.ring_state_offset = 0x70000000;
+  control_ctx_stub.firmware = &opaque_profile;
+#endif
   control_ctx_stub.pid = 4242;
   control_ctx_stub.scratch = SCRATCH_BASE;
   control_ctx_stub.scratch_len = 0x1000;
@@ -148,6 +158,11 @@ int kernel_copyout(intptr_t address, void *data, size_t size) {
 
 intptr_t pbs_resolve_in(pid_t pid, const char *module, const char *symbol) {
   (void)pid;
+#if PBS_PS4_EXPORTED_READ
+  if (!strcmp(symbol, "sceVshAvcapReadVideo")) return 0x4e00;
+  if (!strcmp(symbol, "malloc")) return 0x4f00;
+  if (!strcmp(symbol, "free")) return 0x5000;
+#endif
   if (native_module_enabled &&
       (!strcmp(module, "remoteplay.elf") || !strcmp(module, "SceRemotePlay") ||
        !strcmp(module, "SceRemotePlay.elf") || !strcmp(module, "remoteplay")) &&
@@ -222,6 +237,23 @@ static uint16_t last_ready_dimensions[4];
 static long call(pbs_inject_t *ctx, intptr_t fn, const uint64_t args[6]) {
   seen_trap = ctx->trap;
   switch ((uintptr_t)fn) {
+#if PBS_PS4_EXPORTED_READ
+    case 0x4f00:
+      assert(ctx->worker && args[0] == 0x200000);
+      return FRAME_ADDR;
+    case 0x5000:
+      assert(args[0] == FRAME_ADDR);
+      ++exported_frees;
+      return 0;
+    case 0x4e00:
+      assert(ctx->worker && args[0] == 0x12345678u);
+      assert(args[1] == FRAME_ADDR && args[2] == FRAME_LEN && args[4] == 1);
+      ++exported_reads;
+      for (unsigned i = 0; i < FRAME_LEN; ++i)
+        target[FRAME_ADDR + i] = (unsigned char)(i + 1);
+      memset(target + args[3], 0x5a, 0x40);
+      return FRAME_LEN;
+#endif
     case STATUS_FN:
       target[(size_t)args[0]] = native_status;
       return 0;
