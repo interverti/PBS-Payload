@@ -4,7 +4,7 @@
 [CmdletBinding()]
 param(
   [ValidateSet('PS5', 'PS4')][string]$Platform = 'PS5',
-  [ValidateSet('stream', 'probe', 'smoke', 'worker-probe')][string]$Kind = 'stream',
+  [ValidateSet('stream', 'dump', 'probe', 'smoke', 'worker-probe')][string]$Kind = 'stream',
   [string]$WslDistribution = 'Debian',
   [string]$SdkPath,
   [string]$Output,
@@ -32,7 +32,12 @@ param(
   [ValidateRange(1, 3600)][int]$Ps4CaptureSeconds = 10,
   [switch]$SdkStyle,
   [switch]$TesterRelease,
-  [switch]$Ps5NoNativeRateDefault
+  [switch]$Ps5NoNativeRateDefault,
+  [switch]$Ps5OffsetDumpDefault,
+  [switch]$Ps5DependencyDumpDefault,
+  [switch]$Ps5ModuleFileDumpDefault,
+  [switch]$Ps5DiagnosticOpenOnly,
+  [ValidateSet('2160p', '1440p', '1080p', '720p')][string]$Ps5DefaultResolution = '1440p'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -87,21 +92,22 @@ if ($Platform -eq 'PS4') {
   if ($LASTEXITCODE -ne 0) { throw "PS4 build failed (exit $LASTEXITCODE)" }
   return
 }
-if ($Kind -ne 'stream') { throw 'The probe build is available for PS4 only.' }
+if ($Kind -ne 'stream' -and $Kind -ne 'dump') { throw 'This build kind is available for PS4 only.' }
 if (-not $SdkPath) { $SdkPath = $env:PS5_PAYLOAD_SDK }
 
 $generated = Join-Path $PSScriptRoot 'build/generated'
-New-Item -ItemType Directory -Force -Path $generated | Out-Null
-
-$viewer = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'web\h264.html') -Raw
-$muxer = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'web\h264-mux.js') -Raw
-$viewer = $viewer.Replace('/*PBS_MUX*/', $muxer)
-$escapedViewer = $viewer.Replace('\', '\\').Replace('"', '\"').Replace("`r", '').Replace("`n", '\n')
-$viewerHeader = '#pragma once' + "`n" + 'static const char PBS_H264_HTML[] = "' + $escapedViewer + '";' + "`n"
-[System.IO.File]::WriteAllText((Join-Path $generated 'webui.h'), $viewerHeader, [System.Text.UTF8Encoding]::new($false))
-$bannerBytes = [System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'web\banner.png'))
-$bannerHeader = '#pragma once' + "`n" + 'static const unsigned char PBS_BANNER_BYTES[] = {' + ($bannerBytes -join ',') + '};' + "`n"
-[System.IO.File]::WriteAllText((Join-Path $generated 'banner.h'), $bannerHeader, [System.Text.UTF8Encoding]::new($false))
+if ($Kind -eq 'stream') {
+  New-Item -ItemType Directory -Force -Path $generated | Out-Null
+  $viewer = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'web\h264.html') -Raw -Encoding UTF8
+  $muxer = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'web\h264-mux.js') -Raw -Encoding UTF8
+  $viewer = $viewer.Replace('/*PBS_MUX*/', $muxer)
+  $escapedViewer = $viewer.Replace('\', '\\').Replace('"', '\"').Replace("`r", '').Replace("`n", '\n')
+  $viewerHeader = '#pragma once' + "`n" + 'static const char PBS_H264_HTML[] = "' + $escapedViewer + '";' + "`n"
+  [System.IO.File]::WriteAllText((Join-Path $generated 'webui.h'), $viewerHeader, [System.Text.UTF8Encoding]::new($false))
+  $bannerBytes = [System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'web\banner.png'))
+  $bannerHeader = '#pragma once' + "`n" + 'static const unsigned char PBS_BANNER_BYTES[] = {' + ($bannerBytes -join ',') + '};' + "`n"
+  [System.IO.File]::WriteAllText((Join-Path $generated 'banner.h'), $bannerHeader, [System.Text.UTF8Encoding]::new($false))
+}
 
 $candidates = @(
   $SdkPath,
@@ -121,19 +127,38 @@ if (-not $clang) {
 }
 if (-not $clang) { throw 'clang not found in PATH or the SDK.' }
 
-if (-not $Output) { $Output = Join-Path $PSScriptRoot 'build\pbs.elf' }
+if (-not $Output) {
+  $Output = Join-Path $PSScriptRoot $(if ($Kind -eq 'dump') { 'build\pbs-ps5-dump.elf' } else { 'build\pbs.elf' })
+}
 $outDir = Split-Path -Parent $Output
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 $toolDir = if ($IsWindows -or $env:OS -eq 'Windows_NT') { Join-Path $sdk 'win' } else { Join-Path $sdk 'bin' }
 if (Test-Path $toolDir) { $env:PATH = "$toolDir;$env:PATH" }
 
-$sources = @('platform/ps5/main.c', 'common/process/inject.c', 'common/http/server.c') | ForEach-Object { Join-Path $PSScriptRoot ('src/' + $_) }
+$sourceNames = if ($Kind -eq 'dump') {
+  @('platform/ps5/dump_main.c', 'platform/ps5/module_dump.c')
+} else {
+  @('platform/ps5/main.c', 'platform/ps5/offset_dump.c', 'platform/ps5/module_dump.c', 'common/process/inject.c', 'common/http/server.c')
+}
+$sources = $sourceNames | ForEach-Object { Join-Path $PSScriptRoot ('src/' + $_) }
+if ($Kind -eq 'stream') {
+  $offsetDir = Join-Path $PSScriptRoot 'src/platform/ps5/offset'
+  $sources += @(Get-ChildItem -LiteralPath $offsetDir -Filter '*.c' -File |
+    Sort-Object Name | ForEach-Object { $_.FullName })
+}
 
 $kernelHeader = Join-Path $sdk 'target\include\ps5\kernel.h'
 $sdkDefines = @()
 if($TesterRelease){$sdkDefines += '-DPBS_TESTER_RELEASE'}
 if($Ps5NoNativeRateDefault){$sdkDefines += '-DPBS_PS5_NO_NATIVE_RATE_DEFAULT'}
+if($Ps5OffsetDumpDefault){$sdkDefines += '-DPBS_PS5_OFFSET_DUMP_DEFAULT'}
+if($Ps5DependencyDumpDefault){$sdkDefines += '-DPBS_PS5_DEPENDENCY_DUMP_DEFAULT'}
+if($Ps5ModuleFileDumpDefault){$sdkDefines += '-DPBS_PS5_MODULE_FILE_DUMP_DEFAULT'}
+if($Ps5DiagnosticOpenOnly){$sdkDefines += '-DPBS_PS5_DIAGNOSTIC_OPEN_ONLY'}
+if($Ps5DefaultResolution -eq '1080p'){$sdkDefines += '-DPBS_PS5_DEFAULT_1080P'}
+if($Ps5DefaultResolution -eq '720p'){$sdkDefines += '-DPBS_PS5_DEFAULT_720P'}
+if($Ps5DefaultResolution -eq '2160p'){$sdkDefines += '-DPBS_PS5_DEFAULT_2160P'}
 if ((Test-Path $kernelHeader) -and
     ((Get-Content -LiteralPath $kernelHeader -Raw) -match 'kernel_get_ucred_attrs\s*\(\s*pid_t\s+pid\s*,\s*uint8_t')) {
   $sdkDefines += '-DPBS_UCRED_ATTRS_ARRAY'
@@ -141,6 +166,12 @@ if ((Test-Path $kernelHeader) -and
 
 $includeFlags = @('-I', (Join-Path $PSScriptRoot 'src'), '-I', $generated)
 $cflags = if ($Config -eq 'Debug') { @('-O0', '-g3') } else { @('-O2', '-g') }
+$platformLibraries = if ($Kind -eq 'dump') {
+  @('-lSceLibcInternal')
+} else {
+  @('-lSceLibcInternal', '-lSceNet', '-lSceRegMgr', '-lSceUserService',
+    '-lSceRemoteplay', '-lSceSystemService', '-lSceAudioOut')
+}
 
 if ($SdkStyle) {
   $argsList = @(
@@ -156,11 +187,9 @@ if ($SdkStyle) {
   ) + $includeFlags + $cflags + $sdkDefines + @(
     '-Wall', '-Wextra', '-Wno-unused-parameter'
   ) + $sources + @(
-    '-lSceRegMgr', '-lSceUserService', '-lSceRemoteplay', '-lSceSystemService',
-    '-lSceAudioOut',
     '--start-no-unused-arguments',
     (Join-Path $sdk 'target\lib\crt1.o'),
-    '-lSceLibcInternal', '-lSceNet',
+    $platformLibraries,
     '--end-no-unused-arguments',
     '-o', $Output
   )
@@ -180,9 +209,7 @@ if ($SdkStyle) {
     '-lc', '-lkernel_web',
     '--end-no-unused-arguments',
     (Join-Path $sdk 'target\lib\crt1.o'),
-    '-lSceLibcInternal', '-lSceNet',
-    '-lSceRegMgr', '-lSceUserService', '-lSceRemoteplay', '-lSceSystemService',
-    '-lSceAudioOut',
+    $platformLibraries,
     '-o', $Output
   )
 }
@@ -192,5 +219,11 @@ Write-Host "clang  : $clang"
 Write-Host "config : $Config"
 & $clang @argsList
 if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE)" }
+$elfHeader = [System.IO.File]::ReadAllBytes($Output)
+if ($elfHeader.Length -lt 16 -or $elfHeader[0] -ne 0x7f -or
+    $elfHeader[1] -ne 0x45 -or $elfHeader[2] -ne 0x4c -or
+    $elfHeader[3] -ne 0x46 -or $elfHeader[7] -ne 9) {
+  throw 'PS5 build rejected: ELF OS/ABI must be FreeBSD (9).'
+}
 
 Get-Item $Output | Select-Object FullName, Length

@@ -4,6 +4,7 @@
 #include "banner.h"
 #include "common/media/rtp.h"
 #include "common/media/buffer.h"
+#include "common/media/profiles.h"
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <dirent.h>
@@ -51,6 +52,7 @@ static struct {
   int running, listener, clients, key_request, rec_pending, width, height, fps;
   int media_clients;
   int restart_request;
+  int profiles_enabled, profile_pending, profile_changing, profile_height, profile_error;
   uint64_t generation;
   FILE *rec;
   int rec_headers_pending;
@@ -93,6 +95,22 @@ int pbs_h264_take_restart_request(void) {
   pthread_mutex_unlock(&live.lock);
   return requested;
 }
+void pbs_h264_enable_profiles(void) {
+  pthread_mutex_lock(&live.lock); live.profiles_enabled = 1; pthread_mutex_unlock(&live.lock);
+}
+int pbs_h264_take_profile_request(int *height) {
+  pthread_mutex_lock(&live.lock);
+  int requested = live.profile_pending;
+  if (requested) { *height = live.profile_height; live.profile_pending = 0; }
+  pthread_mutex_unlock(&live.lock);
+  return requested;
+}
+void pbs_h264_profile_failed(void) {
+  pthread_mutex_lock(&live.lock);
+  live.profile_error = 1; live.profile_changing = live.profile_pending = 0;
+  live.profile_height = live.height;
+  pthread_mutex_unlock(&live.lock);
+}
 
 
 static uint64_t milliseconds(void) {
@@ -114,6 +132,31 @@ static int reply(int fd, const char *type, const void *data, size_t size) {
   char header[256];
   int n = snprintf(header, sizeof header, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %zu\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", type, size);
   return send_all(fd, header, n) || send_all(fd, data, size);
+}
+static void profile_reply(int fd, int code, const char *message) {
+  char body[192], header[256];
+  int n = snprintf(body, sizeof body, "{\"message\":\"%s\"}", message);
+  int h = snprintf(header, sizeof header, "HTTP/1.1 %d Profile\r\nContent-Type: application/json\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", code, n);
+  send_all(fd, header, (size_t)h); send_all(fd, body, (size_t)n);
+}
+static void select_profile(int fd, const char *path) {
+  int height = 0, consumed = 0, code = 200;
+  const char *message = "Resolution change requested";
+  if (sscanf(path, "/capture/profile?height=%d%n", &height, &consumed) != 1 ||
+      path[consumed] || pbs_capture_profile_for_height(height, NULL)) {
+    profile_reply(fd, 400, "Unsupported resolution"); return;
+  }
+  pthread_mutex_lock(&live.lock);
+  if (!live.profiles_enabled) { code = 501; message = "This capture backend does not support resolution changes"; }
+  else if (live.rec || live.rec_pending) { code = 409; message = "Stop recording before changing resolution"; }
+  else if (live.profile_changing) { code = 409; message = "A resolution change is already in progress"; }
+  else if (height == live.height) { message = "Resolution already active"; }
+  else {
+    live.profile_height = height; live.profile_pending = live.profile_changing = 1;
+    live.profile_error = 0; live.restart_request = 1;
+  }
+  pthread_mutex_unlock(&live.lock);
+  profile_reply(fd, code, message);
 }
 static int keyframe(const unsigned char *p, size_t size) {
   for (size_t i = 0; i + 4 < size; i++) {
@@ -356,7 +399,9 @@ static void configuration(int fd) {
   if (!strcmp(live.audio_codec, "none")) snprintf(audio, sizeof audio, "null");
   else snprintf(audio, sizeof audio, "{\"codec\":\"%s\",\"channels\":%d,\"rate\":%d,\"bits\":32}",
       live.audio_codec[0] ? live.audio_codec : "pcm_f32le", live.audio_channels, live.audio_rate);
-  int n = snprintf(body, sizeof body, "{\"platform\":\"%s\",\"width\":%d,\"height\":%d,\"fps\":%d,\"codec\":\"avc1.%02x%02x%02x\",\"sps\":\"%s\",\"pps\":\"%s\",\"audio\":%s}", platform, live.width, live.height, live.fps, live.sps[1], live.sps[2], live.sps[3], sps, pps, audio);
+  int n = snprintf(body, sizeof body, "{\"platform\":\"%s\",\"width\":%d,\"height\":%d,\"fps\":%d,\"codec\":\"avc1.%02x%02x%02x\",\"sps\":\"%s\",\"pps\":\"%s\",\"audio\":%s,\"resolutions\":%s,\"requested_height\":%d,\"profile_changing\":%s,\"profile_error\":%s}", platform, live.width, live.height, live.fps, live.sps[1], live.sps[2], live.sps[3], sps, pps, audio,
+      live.profiles_enabled ? "[720,1080,1440,2160]" : "[]", live.profile_changing ? live.profile_height : live.height,
+      live.profile_changing ? "true" : "false", live.profile_error ? "true" : "false");
   pthread_mutex_unlock(&live.lock);
   if (n > 0 && (size_t)n < sizeof body) reply(fd, "application/json", body, (size_t)n);
 }
@@ -459,6 +504,11 @@ static void *client_thread(void *arg) {
   else if (!strcmp(method, "GET") && !strncmp(path, "/recordings/", 12)) download(fd, path + 12);
   else if (!strcmp(method, "POST") && !strcmp(path, "/record/start")) {
     pthread_mutex_lock(&live.lock);
+    if (live.profile_changing) {
+      pthread_mutex_unlock(&live.lock);
+      profile_reply(fd, 409, "Wait for the resolution change before recording");
+      goto done;
+    }
     if (!live.rec && !live.rec_pending) {
       live.rec_pending = 1; live.key_request = 1; live.rec_error = 0;
       live.rec_frames = live.rec_bytes = 0;
@@ -475,6 +525,8 @@ static void *client_thread(void *arg) {
   } else if (!strcmp(method, "POST") && !strcmp(path, "/video/keyframe")) {
     pthread_mutex_lock(&live.lock); live.key_request = 1; pthread_mutex_unlock(&live.lock);
     reply(fd, "application/json", "{}", 2);
+  } else if (!strcmp(method, "POST") && !strncmp(path, "/capture/profile", 16)) {
+    select_profile(fd, path);
   } else if (!strcmp(method, "POST") && !strcmp(path, "/capture/restart")) {
     pthread_mutex_lock(&live.lock); live.restart_request = 1; pthread_mutex_unlock(&live.lock);
     reply(fd, "application/json", "{}", 2);
@@ -544,7 +596,14 @@ int pbs_h264_server_start_at_rate(int port, int width, int height, int fps,
   if (sps_len < 4 || sps_len > 128 || !pps_len || pps_len > 128 || port < 1 || port > 65535) return -1;
   pthread_mutex_lock(&live.lock);
   if (live.running) {
+    /* A new encoder cannot publish packets left in the previous profile's
+     * ring. Invalidate both media histories before installing its headers. */
+    for (int i = 0; i < SLOTS; ++i) { live.frames[i].seq = 0; live.frames[i].len = 0; live.frames[i].key = 0; }
+    for (int i = 0; i < AUDIO_SLOTS; ++i) { live.audio[i].seq = 0; live.audio[i].len = 0; }
+    live.seq = live.bytes = live.audio_seq = live.audio_bytes = live.audio_chunks = 0;
+    live.started = milliseconds(); live.audio_started = 0; live.audio_generation++;
     live.width = width; live.height = height; live.fps = fps;
+    if (live.profile_changing && live.profile_height == height) live.profile_changing = 0;
     memcpy(live.sps, sps, sps_len); live.sps_len = sps_len;
     memcpy(live.pps, pps, pps_len); live.pps_len = pps_len;
     live.generation++; live.key_request = 1;

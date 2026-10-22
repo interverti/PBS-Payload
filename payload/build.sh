@@ -207,7 +207,12 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
     if [[ $venc_journal == 1 ]]; then sources+=("$root/src/platform/ps4/diagnostics/venc_journal.c"); fi
     if [[ $daemon_dump == 1 ]]; then sources+=("$root/src/platform/ps4/diagnostics/daemon_dump.c"); fi
   else
-    sources=("$root/src/platform/ps5/main.c" "$root/src/common/process/inject.c" "$root/src/common/http/server.c")
+    sources=("$root/src/platform/ps5/main.c" "$root/src/platform/ps5/offset_dump.c"
+      "$root/src/platform/ps5/module_dump.c" "$root/src/common/process/inject.c"
+      "$root/src/common/http/server.c")
+    for offset_source in "$root"/src/platform/ps5/offset/*.c; do
+      sources+=("$offset_source")
+    done
     defines=()
   fi
   filename=pbs.elf
@@ -305,6 +310,15 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
     filename=${filename%.elf}-nativesource.elf
   fi
   "$compiler" "${includes[@]}" "$optimization" "${debug_flags[@]}" -Wall -Wextra -Wno-unused-parameter "${defines[@]}" "${sources[@]}" -o "$out/$filename"
+  if [[ $platform == ps5 ]]; then
+    python3 - "$out/$filename" <<'PY'
+import pathlib
+import sys
+elf = pathlib.Path(sys.argv[1]).read_bytes()
+if len(elf) < 16 or elf[:4] != b"\x7fELF" or elf[7] != 9:
+    raise SystemExit("PS5 build rejected: ELF OS/ABI must be FreeBSD (9); use payload/build.ps1 with a compatible SDK")
+PY
+  fi
   if [[ $platform == ps4 && $remote_avcap == 1 ]]; then
     python3 "$root/../tools/verify_ps4_worker_blob.py" "$out/$filename"
   fi

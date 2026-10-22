@@ -69,6 +69,7 @@ python3 payload/embed_assets.py
 "$out/rtp-packetizer"
 run http-shutdown -pthread tests/http/shutdown.c payload/src/common/http/server.c
 run http-frame-rate -pthread tests/http/frame_rate.c payload/src/common/http/server.c
+run http-profiles -pthread tests/http/profiles.c payload/src/common/http/server.c
 if command -v node >/dev/null 2>&1; then
   node tests/media/h264_mux_rate.js
 else

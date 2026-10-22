@@ -17,3 +17,7 @@ void pbs_h264_server_stop(void);
 void pbs_h264_server_wait(void);
 void pbs_h264_discontinuity(void);
 int pbs_h264_take_restart_request(void);
+/* Only enable on backends that can reopen all advertised capture profiles. */
+void pbs_h264_enable_profiles(void);
+int pbs_h264_take_profile_request(int *height);
+void pbs_h264_profile_failed(void);
