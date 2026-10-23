@@ -27,6 +27,8 @@ typedef struct {
   uint32_t paste_offset;
   uint32_t video_mode_offset;
   uint32_t mask_mode_offset;
+  /* Number of bytes after mask_mode_offset; zero means the default 0x24. */
+  uint32_t mask_span;
 } pbs_ps5_remoteplay_offsets;
 
 typedef struct pbs_ps5_offset_profile {

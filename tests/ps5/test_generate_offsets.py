@@ -1,0 +1,182 @@
+"""Regressions for the PS5 firmware dump parser and safe profile generation."""
+
+import os
+import subprocess
+import sys
+import tarfile
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+
+TOOLS = Path(__file__).resolve().parents[2] / "tools"
+sys.path.insert(0, str(TOOLS))
+import generate_ps5_offsets as offsets
+
+
+class GenerateOffsetsTests(unittest.TestCase):
+    def test_zip_and_tar_select_memory_prefixes_only(self):
+        members = {
+            "dumps/ps5-06020004-test/libSceAvcap2.sprx.prefix.bin": b"AVCAP",
+            "dumps/ps5-06020004-test/eboot.bin.prefix.bin": b"EBOOT",
+            "dumps/ps5-06020004-test/libSceAvcap2.sprx": b"DISK_SELF",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            zipped = root / "test.zip"
+            with zipfile.ZipFile(zipped, "w") as z:
+                for name, value in members.items():
+                    z.writestr(name, value)
+            import io
+            tarred = root / "test.tar"
+            with tarfile.open(tarred, "w") as t:
+                for name, value in members.items():
+                    info = tarfile.TarInfo(name)
+                    info.size = len(value)
+                    t.addfile(info, io.BytesIO(value))
+            for source in (zipped, tarred):
+                loaded = offsets.load_members(source, "7z")
+                self.assertEqual(len(loaded), 2)
+                self.assertEqual(set(loaded.values()), {b"AVCAP", b"EBOOT"})
+
+    def test_existing_profiles_survive_partial_regeneration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dumps = root / "dumps"
+            out = root / "out"
+            dumps.mkdir()
+            out.mkdir()
+            original = offsets.render_profile(0x09200005, {
+                "open_video": 0x360, "ipc_command": 0x4000, "size": 0x2b0,
+                "kind": 0x168, "constructor": 0x4da1d,
+                "rate_group": 0x90, "rate_group_size": 0xd0,
+                "rate_descriptor_size": 0x20, "image_group": 0x1b0,
+                "image_group_size": 0x100, "image_descriptor_size": 0x40,
+                "width": 0x1d0, "height": 0x1d4, "image_paste": 0x1f8,
+                "video_mode": 0x280, "mask_mode": 0x284,
+            }) + "/* keep local annotation */\n"
+            profile = out / "920.c"
+            profile.write_text(original, encoding="utf-8")
+            command = [sys.executable, str(TOOLS / "generate_ps5_offsets.py"),
+                       str(dumps), "--out", str(out)]
+            for _ in range(2):
+                subprocess.run(command, check=True, capture_output=True, text=True)
+                self.assertEqual(profile.read_text(encoding="utf-8"), original)
+                registry = (out / "registry.c").read_text(encoding="utf-8")
+                self.assertIn("case 0x09200005u: return &pbs_ps5_offsets_920;", registry)
+                self.assertEqual(registry.count("case 0x09200005u"), 1)
+
+    def test_duplicate_archive_members_are_rejected(self):
+        import warnings
+        with tempfile.TemporaryDirectory() as tmp:
+            zipped = Path(tmp) / "duplicate.zip"
+            name = "ps5-06020004-test/eboot.bin.prefix.bin"
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                with zipfile.ZipFile(zipped, "w") as z:
+                    z.writestr(name, b"ORIGINAL")
+                    z.writestr(name, b"REPLACED")
+            with self.assertRaisesRegex(ValueError, "duplicate memory image"):
+                offsets.load_members(zipped, "7z")
+
+    def test_oversized_compressed_archive_member_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            zipped = Path(tmp) / "oversized.zip"
+            with zipfile.ZipFile(zipped, "w", compression=zipfile.ZIP_DEFLATED) as z:
+                z.writestr("ps5-06020004-test/eboot.bin.prefix.bin",
+                           b"X" * (8 * 1024 * 1024 + 1))
+            with self.assertRaisesRegex(ValueError, "invalid length"):
+                offsets.load_members(zipped, "7z")
+
+    def test_unverified_400_registry_requires_explicit_opt_in(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dumps, out = root / "dumps", root / "out"
+            dumps.mkdir()
+            out.mkdir()
+            result = dict(open_video=0x33f, ipc_command=0x3ac4,
+                          size=0x230, kind=0x100, constructor=0x1b7f12,
+                          rate_group=0x90, rate_group_size=0x68,
+                          rate_descriptor_size=0x20,
+                          image_group=0x148, image_group_size=0xe8,
+                          image_descriptor_size=0x40,
+                          width=0x168, height=0x16c, image_paste=0x190,
+                          video_mode=0x218, mask_mode=0x21c, mask_span=0x14)
+            (out / "400.c").write_text(offsets.render_profile(0x04000042, result),
+                                       encoding="utf-8")
+            subprocess.run([sys.executable, str(TOOLS / "generate_ps5_offsets.py"),
+                            str(dumps), "--out", str(out)], check=True,
+                           capture_output=True, text=True)
+            registry = (out / "registry.c").read_text(encoding="utf-8")
+            self.assertIn("#ifdef PBS_PS5_EXPERIMENTAL_FW400", registry)
+            self.assertIn("case 0x04000042u:", registry)
+            self.assertIn("#endif", registry)
+
+    def test_real_legacy_layouts_when_dumps_provided(self):
+        dumps = os.environ.get("PBS_PS5_DUMPS")
+        if not dumps:
+            self.skipTest("set PBS_PS5_DUMPS to test against real firmware memory")
+        directory = Path(dumps)
+        seven_zip = os.environ.get("PBS_SEVEN_ZIP", "7z")
+        expected = {
+            0x03200004: (0x360, 0x3b45, 0x218, 0xe8, 0x1af429,
+                         0x78, 0x68, 0x20, 0x130, 0xe8, 0x40,
+                         0x150, 0x154, 0x178, 0x200, 0x204),
+            0x04000042: (0x33f, 0x3ac4, 0x230, 0x100, 0x1b7f12,
+                         0x90, 0x68, 0x20, 0x148, 0xe8, 0x40,
+                         0x168, 0x16c, 0x190, 0x218, 0x21c),
+            0x06020004: (0x340, 0x3e15, 0x2a8, 0x168, 0x4a03a,
+                         0x90, 0xd0, 0x20, 0x1b0, 0xf8, 0x40, 0x1d0,
+                         0x1d4, 0x1f8, 0x280, 0x284),
+            0x07200005: (0x340, 0x3e45, 0x2a8, 0x168, 0x4ae06,
+                         0x90, 0xd0, 0x20, 0x1b0, 0xf8, 0x40,
+                         0x1d0, 0x1d4, 0x1f8, 0x280, 0x284),
+            0x08400005: (0x340, 0x3ee5, 0x2a8, 0x168, 0x4b6bd,
+                         0x90, 0xd0, 0x20, 0x1b0, 0xf8, 0x40,
+                         0x1d0, 0x1d4, 0x1f8, 0x280, 0x284),
+            0x09200005: (0x340, 0x3f45, 0x2b0, 0x168, 0x4da1d,
+                         0x90, 0xd0, 0x20, 0x1b0, 0x100, 0x40,
+                         0x1d0, 0x1d4, 0x1f8, 0x280, 0x284),
+            0x10600006: (0x360, 0x4227, 0x2b8, 0x188, 0x4d5ad,
+                         0xa8, 0xd8, 0x20, 0x1d0, 0xe8, 0x28,
+                         0x1f0, 0x1f4, 0x200, 0x288, 0x28c),
+        }
+        for fw, values in expected.items():
+            archive_name = {
+                0x03200004: "fw3.20.zip",
+                0x04000042: "fw4.00.7z",
+                0x06020004: "fw6.02.zip",
+                0x07200005: "fw7.20.zip",
+                0x08400005: "FW-8.40.zip",
+                0x09200005: "fw9.20.zip",
+                0x10600006: "fw1060.zip",
+            }[fw]
+            archives = offsets.load_members(directory / archive_name, seven_zip)
+            entries = {n: b for n, b in archives.items() if f"ps5-{fw:08x}-" in n}
+            avcap = [offsets.avcap_layout(b) for n, b in entries.items()
+                     if n.endswith(offsets.MODULE)]
+            self.assertEqual(len(avcap), 1)
+            abi = avcap[0]
+            self.assertEqual((abi["open_video"], abi["size"], abi["kind"]),
+                             (values[0], values[2], values[3]))
+            self.assertEqual(abi["ipc_command"], values[1])
+            native = []
+            for name, data in entries.items():
+                if name.endswith(offsets.EBOOT):
+                    try:
+                        native.append(offsets.constructor_layout(data, abi["size"]))
+                    except ValueError:
+                        pass
+            self.assertEqual(len(native), 1)
+            n = native[0]
+            actual = (n["constructor"], n["rate_group"], n["rate_group_size"],
+                      n["rate_descriptor_size"], n["image_group"], n["image_group_size"],
+                      n["image_descriptor_size"], n["width"], n["height"],
+                      n["image_paste"], n["video_mode"], n["mask_mode"])
+            self.assertEqual(actual, values[4:])
+            self.assertEqual(n.get("mask_span", 0x24),
+                             0x14 if fw in (0x03200004, 0x04000042) else 0x24)
+
+
+if __name__ == "__main__":
+    unittest.main()

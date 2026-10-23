@@ -214,6 +214,9 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
       sources+=("$offset_source")
     done
     defines=()
+    if [[ ${PBS_PS5_EXPERIMENTAL_FW400:-0} == 1 ]]; then
+      defines+=(-DPBS_PS5_EXPERIMENTAL_FW400)
+    fi
   fi
   filename=pbs.elf
   if [[ $platform == ps4 && $kind == stream && $remote_avcap == 1 ]]; then

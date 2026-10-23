@@ -35,7 +35,7 @@ static void ps4_http_trace(const char *text) {
 #define SLOTS 64
 #define FRAME_MAX 0x200000u
 #define AUDIO_SLOTS 256
-#define AUDIO_MAX 0x4000u
+#define AUDIO_MAX 0x10000u
 #ifndef PBS_RECORD_DIR
 #define PBS_RECORD_DIR "/data/pbs/recordings"
 #endif
@@ -278,8 +278,15 @@ static void stream(int fd) {
   uint64_t next = live.seq + 1;
   uint64_t generation = live.generation;
   live.key_request = 1;
+  uint64_t last_key_request = milliseconds();
   int synced = 0;
   while (live.running && generation == live.generation) {
+    /* A failed or missed encoder IDR request must not strand the viewer. */
+    uint64_t now = milliseconds();
+    if (!synced && now - last_key_request >= 2000) {
+      live.key_request = 1;
+      last_key_request = now;
+    }
     int alive = 1;
     while (alive && live.running && next > live.seq) alive = wait_media(fd, generation, 0);
     if (!alive || !live.running || generation != live.generation) { HTTP_TRACE("stream reader no longer alive\n"); break; }

@@ -68,12 +68,21 @@ body[data-state=live] #message{color:var(--ok);border-color:#245c3e;background:v
 /*PBS_MUX*/
 </script><script>
 const video=document.getElementById('video'),message=document.getElementById('message'),record=document.getElementById('record');
-let recording=false,stopped=false,statusBusy=false,recordingName="",playbackUrl=null;
+let recording=false,stopped=false,statusBusy=false,recordingName="";
+let profilesFetching=false;
+async function fetchWithTimeout(path,options={},ms=5000){
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),ms);
+ try{return await fetch(path,{cache:'no-store',...options,signal:controller.signal});}
+ finally{clearTimeout(timer);}
+}
 let hiddenSince=document.hidden?Date.now():0;
 let profileBusy=false,profileOptions='';
 const resolution=document.getElementById('resolution'),applyResolution=document.getElementById('apply-resolution'),profileInfo=document.getElementById('profile-info');
 async function refreshProfiles(){
- const response=await fetch('/config.json',{cache:'no-store'});if(!response.ok)return;
+ if(profilesFetching||stopped)return;
+ profilesFetching=true;
+ try{
+ const response=await fetchWithTimeout('/config.json');if(!response.ok)return;
  const c=await response.json(),heights=(c.resolutions||[]).filter(h=>[720,1080,1440,2160].includes(h));
  const controls=document.getElementById('profile-controls'),hidden=!heights.length;
  if(controls.hidden!==hidden)controls.hidden=hidden;
@@ -86,57 +95,190 @@ async function refreshProfiles(){
  if(applyResolution.disabled!==disabled)applyResolution.disabled=disabled;
  const text=c.profile_error?'Profile unavailable. The previous resolution was restored.':profileBusy?'Applying resolution; reconnecting the stream...':recording?'Stop recording before changing resolution.':'Active: '+c.height+'p. Lower resolutions reduce network and decoding load.';
  if(profileInfo.textContent!==text)profileInfo.textContent=text;
+ }finally{profilesFetching=false;}
 }
 applyResolution.onclick=async()=>{
  applyResolution.disabled=resolution.disabled=true;
- try{const r=await fetch('/capture/profile?height='+encodeURIComponent(resolution.value),{method:'POST'});const body=await r.json();if(!r.ok)throw new Error(body.message||'Resolution change failed.');await refreshProfiles();}
+ try{const r=await fetchWithTimeout('/capture/profile?height='+encodeURIComponent(resolution.value),{method:'POST'});const body=await r.json();if(!r.ok)throw new Error(body.message||'Resolution change failed.');await refreshProfiles();}
  catch(e){profileInfo.textContent=e.message;applyResolution.disabled=resolution.disabled=false;}
 };
-async function listRecordings(){const items=await(await fetch("/recordings",{cache:"no-store"})).json();const panel=document.getElementById("recordings");panel.replaceChildren();for(const item of items.reverse()){const link=document.createElement("a");link.href="/recordings/"+encodeURIComponent(item.name);link.download=item.name;link.textContent=item.name+" · "+(item.bytes/1048576).toFixed(1)+" MB";panel.appendChild(link);}if(!items.length)panel.textContent="No recordings yet";}
+async function listRecordings(){const response=await fetchWithTimeout("/recordings");if(!response.ok)throw new Error('Recordings unavailable');const items=await response.json();const panel=document.getElementById("recordings");panel.replaceChildren();for(const item of items.reverse()){const link=document.createElement("a");link.href="/recordings/"+encodeURIComponent(item.name);link.download=item.name;link.textContent=item.name+" · "+(item.bytes/1048576).toFixed(1)+" MB";panel.appendChild(link);}if(!items.length)panel.textContent="No recordings yet";}
 async function updateStatus(){
  if(statusBusy||stopped)return;statusBusy=true;
- try{const response=await fetch('/status.json',{cache:'no-store'});if(!response.ok)throw new Error('Status unavailable');const s=await response.json();recording=s.recording;const recordLabel=recording?'Stop recording':'Record';if(record.textContent!==recordLabel)record.textContent=recordLabel;record.classList.toggle('active',recording);document.getElementById('stats').textContent=`${s.width} × ${s.height} · ${s.fps.toFixed(1)} fps · ${s.kbps.toFixed(0)} kbit/s`;const info=document.getElementById('record-info');info.textContent=s.recording_error?'Recording failed: unable to write to the console.':recording?`Recording · ${s.recording_seconds.toFixed(1)} seconds · ${(s.recording_bytes/1048576).toFixed(2)} MB`:s.recording_name?`Saved · ${s.recording_seconds.toFixed(1)} seconds · ${(s.recording_bytes/1048576).toFixed(2)} MB`:'Not recording';const link=document.getElementById('download');link.hidden=!s.recording_name||recording;if(!link.hidden){link.href='/recordings/'+encodeURIComponent(s.recording_name);link.download=s.recording_name;}if(!recording&&s.recording_name!==recordingName){recordingName=s.recording_name;await listRecordings();}}
- catch(e){message.textContent='Connection lost. The recording status cannot be verified.';}
+ try{const response=await fetchWithTimeout('/status.json');if(!response.ok)throw new Error('Status unavailable');const s=await response.json();recording=s.recording;const recordLabel=recording?'Stop recording':'Record';if(record.textContent!==recordLabel)record.textContent=recordLabel;record.classList.toggle('active',recording);document.getElementById('stats').textContent=`${s.width} × ${s.height} · ${s.fps.toFixed(1)} fps · ${s.kbps.toFixed(0)} kbit/s`;const info=document.getElementById('record-info');info.textContent=s.recording_error?'Recording failed: unable to write to the console.':recording?`Recording · ${s.recording_seconds.toFixed(1)} seconds · ${(s.recording_bytes/1048576).toFixed(2)} MB`:s.recording_name?`Saved · ${s.recording_seconds.toFixed(1)} seconds · ${(s.recording_bytes/1048576).toFixed(2)} MB`:'Not recording';const link=document.getElementById('download');link.hidden=!s.recording_name||recording;if(!link.hidden){link.href='/recordings/'+encodeURIComponent(s.recording_name);link.download=s.recording_name;}if(!recording&&s.recording_name!==recordingName){recordingName=s.recording_name;await listRecordings();}}
+ catch(e){if(!currentPlayback&&!stopped)message.textContent='Connection lost. Reconnecting...';}
  finally{refreshProfiles().catch(()=>{});statusBusy=false;}
 }
-record.onclick=async()=>{record.disabled=true;try{const response=await fetch(recording?'/record/stop':'/record/start',{method:'POST'});if(!response.ok)throw new Error('The recording command failed.');await updateStatus();await listRecordings();}catch(e){document.getElementById('record-info').textContent=e.message;}finally{record.disabled=false;}};
+record.onclick=async()=>{record.disabled=true;try{const response=await fetchWithTimeout(recording?'/record/stop':'/record/start',{method:'POST'});if(!response.ok)throw new Error('The recording command failed.');await updateStatus();await listRecordings();}catch(e){document.getElementById('record-info').textContent=e.message;}finally{record.disabled=false;}};
 document.getElementById('snapshot').onclick=()=>{if(!video.videoWidth)return;const canvas=document.createElement('canvas');canvas.width=video.videoWidth;canvas.height=video.videoHeight;canvas.getContext('2d').drawImage(video,0,0);canvas.toBlob(blob=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pbs.png';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),5000);});};
-document.getElementById('stop').onclick=async()=>{stopped=true;await fetch('/stop',{method:'POST'});video.pause();message.textContent='Stream stopped. Capture resources have been released.';};
+document.getElementById('stop').onclick=async()=>{stopped=true;restartViewer('Stream stopped');video.pause();try{await fetchWithTimeout('/stop',{method:'POST'});}catch(e){message.textContent='Unable to stop: '+e.message;return;}message.textContent='Stream stopped. Capture resources have been released.';};
+const VIDEO_IDLE_MS=9000, BUFFER_IDLE_MS=7000;
+let currentPlayback=null;
+function restartViewer(reason){if(currentPlayback)currentPlayback.abort(reason||'Reconnecting video');}
 async function play(){
- const config=window.pbsConfig=await(await fetch('/config.json',{cache:'no-store'})).json();const mime=`video/mp4; codecs="${config.codec}"`;
- document.getElementById('platform').textContent=(config.platform||'Console')+' live · Hardware H.264';
- if(!window.MediaSource||!MediaSource.isTypeSupported(mime))throw new Error('This browser does not support this H.264 stream. Open the viewer in Chrome, Edge or Safari.');
- const media=new MediaSource();const nextUrl=URL.createObjectURL(media);video.src=nextUrl;if(playbackUrl)URL.revokeObjectURL(playbackUrl);playbackUrl=nextUrl;await new Promise(resolve=>media.addEventListener('sourceopen',resolve,{once:true}));
- const source=media.addSourceBuffer(mime),queue=[H264Mux.init(config)];let sequence=1,recovering=true;video.autoplay=false;video.pause();video.onwaiting=()=>{if(!stopped){recovering=true;if(message.textContent!=='Buffering…')message.textContent='Buffering…';}};
- const drain=()=>{if(!source.updating&&queue.length){if(queue.length>300)throw new Error('The browser cannot keep up with the live stream. Reload to reconnect.');source.appendBuffer(queue.shift());}};
- source.addEventListener('error',()=>{message.textContent='Playback error. Reload to reconnect.';});
- source.addEventListener('updateend',()=>{if(video.buffered.length){const i=video.buffered.length-1,start=video.buffered.start(i),end=video.buffered.end(i);if(video.currentTime<start||end-video.currentTime>0.10)video.currentTime=Math.max(start,end-0.033);document.getElementById('latency').textContent=`Playback buffer: ${Math.round(Math.max(0,end-video.currentTime)*1000)} ms`;video.playbackRate=end-video.currentTime>0.055?1.05:end-video.currentTime<0.02?0.98:1;if(recovering&&end-video.currentTime>=0.033&&!stopped){recovering=false;video.play().catch(()=>{message.textContent='Press Play to start.';});}if(!queue.length&&start<video.currentTime-20){source.remove(start,video.currentTime-10);return;}}drain();});
- drain();const response=await fetch('/frames');if(!response.ok)throw new Error('Unable to open the stream.');const reader=response.body.getReader();let pending=new Uint8Array();let samples=[],firstPts=0;
- while(!stopped){const {value,done}=await reader.read();if(done)break;const merged=new Uint8Array(pending.length+value.length);merged.set(pending);merged.set(value,pending.length);pending=merged;let offset=0;
-  while(pending.length-offset>=8){const view=new DataView(pending.buffer,pending.byteOffset+offset);const size=view.getUint32(0),pts=view.getUint32(4);if(size>2097152)throw new Error('Frame exceeds the supported size');if(pending.length-offset<8+size)break;const sample=H264Mux.accessUnit(pending.subarray(offset+8,offset+8+size));sample.duration=Math.round(90000/(config.fps||60));if(!samples.length)firstPts=pts;samples.push(sample);offset+=8+size;if(samples.length>=1){queue.push(H264Mux.fragment(sequence++,firstPts,samples));samples=[];drain();if(!recovering){const liveMessage='Live from '+(config.platform||'console');if(message.textContent!==liveMessage)message.textContent=liveMessage;}}}
-  pending=pending.slice(offset);
+ const controller=new AbortController(),signal=controller.signal;
+ let failure=null,reader=null,source=null,media=null,mediaUrl=null,watchdog=null;
+ let lastFrame=Date.now(),lastAppend=Date.now(),lastPresented=Date.now(),startedPlaying=false;
+ let sequence=1,queue=[],pending=new Uint8Array(),attemptingPlay=false;
+ const fail=error=>{
+  if(signal.aborted)return;
+  failure=error instanceof Error?error:new Error(error);
+  controller.abort();
+  if(reader)reader.cancel().catch(()=>{});
+ };
+ const session={abort:fail};
+ currentPlayback=session;
+ const waiting=()=>{if(!stopped&&!signal.aborted)message.textContent='Buffering...';};
+ const presented=()=>{if(!signal.aborted)lastPresented=Date.now();};
+ const playing=()=>{startedPlaying=true;lastPresented=Date.now();};
+ const decoderError=()=>fail('Browser video decoder failed');
+ let update=null,sourceError=null;
+ video.addEventListener('waiting',waiting);
+ if(!video.requestVideoFrameCallback)video.addEventListener('timeupdate',presented);
+ video.addEventListener('playing',playing);
+ video.addEventListener('error',decoderError);
+ if(video.requestVideoFrameCallback){
+  const track=()=>{if(signal.aborted)return;lastPresented=Date.now();video.requestVideoFrameCallback(track);};
+  video.requestVideoFrameCallback(track);
  }
- if(!stopped)message.textContent='Stream disconnected. Reload to reconnect.';reader.cancel().catch(()=>{});
+ watchdog=setInterval(()=>{
+  if(stopped){controller.abort();return;}
+  if(signal.aborted||document.hidden)return;
+  const now=Date.now();
+  if(now-lastFrame>VIDEO_IDLE_MS)fail('Video stream stalled');
+  else if(queue.length>3&&now-lastAppend>BUFFER_IDLE_MS)fail('Browser video buffer stalled');
+  else if(startedPlaying&&!video.paused&&now-lastPresented>12000)fail('Video decoder stopped rendering');
+ },1000);
+ try{
+  const configResponse=await fetch('/config.json',{cache:'no-store',signal});
+  if(!configResponse.ok)throw new Error('Video configuration unavailable');
+  const config=window.pbsConfig=await configResponse.json();
+  const mime='video/mp4; codecs="'+config.codec+'"';
+  document.getElementById('platform').textContent=(config.platform||'Console')+' live - Hardware H.264';
+  if(!window.MediaSource||!MediaSource.isTypeSupported(mime))throw new Error('Unsupported browser video format');
+  media=new MediaSource();
+  mediaUrl=URL.createObjectURL(media);
+  video.pause();video.src=mediaUrl;
+  await new Promise((resolve,reject)=>{
+   const clean=()=>{media.removeEventListener('sourceopen',open);media.removeEventListener('error',err);signal.removeEventListener('abort',cancel);};
+   const open=()=>{clean();resolve();};
+   const err=()=>{clean();reject(new Error('Media source error'));};
+   const cancel=()=>{clean();reject(new Error('Playback interrupted'));};
+   media.addEventListener('sourceopen',open,{once:true});
+   media.addEventListener('error',err,{once:true});
+   signal.addEventListener('abort',cancel,{once:true});
+   if(signal.aborted)cancel();
+  });
+  if(signal.aborted)throw new Error('Playback interrupted');
+  source=media.addSourceBuffer(mime);
+  queue.push(H264Mux.init(config));
+  const drain=()=>{
+   if(signal.aborted||source.updating||!queue.length)return;
+   if(queue.length>120){fail('Playback queue overloaded');return;}
+   try{source.appendBuffer(queue.shift());}catch(e){fail(e);}
+  };
+  sourceError=()=>fail('Browser media source buffer error');
+  update=()=>{
+   if(signal.aborted)return;
+   lastAppend=Date.now();
+   try{
+    if(video.buffered.length){
+     const i=video.buffered.length-1,start=video.buffered.start(i),end=video.buffered.end(i);
+     if(video.currentTime<start||end-video.currentTime>0.10)video.currentTime=Math.max(start,end-0.033);
+     document.getElementById('latency').textContent='Playback buffer: '+Math.round(Math.max(0,end-video.currentTime)*1000)+' ms';
+     video.playbackRate=end-video.currentTime>0.055?1.05:end-video.currentTime<0.02?0.98:1;
+     if(video.paused&&!attemptingPlay&&end-video.currentTime>=0.033&&!stopped){
+      attemptingPlay=true;
+      video.play().catch(()=>{if(!signal.aborted)message.textContent='Press Play to start.';})
+       .finally(()=>{attemptingPlay=false;});
+     }
+     if(!queue.length&&start<video.currentTime-20){source.remove(start,video.currentTime-10);return;}
+    }
+    drain();
+   }catch(e){fail(e);}
+  };
+  source.addEventListener('error',sourceError);
+  source.addEventListener('updateend',update);
+  drain();
+  const response=await fetch('/frames',{cache:'no-store',signal});
+  if(!response.ok||!response.body)throw new Error('Unable to connect to video frames');
+  reader=response.body.getReader();
+  while(!stopped&&!signal.aborted){
+   const {value,done}=await reader.read();
+   if(done)break;
+   if(!value||!value.length)continue;
+   const bytes=new Uint8Array(pending.length+value.length);
+   bytes.set(pending);bytes.set(value,pending.length);pending=bytes;
+   let offset=0;
+   while(pending.length-offset>=8){
+    const view=new DataView(pending.buffer,pending.byteOffset+offset);
+    const size=view.getUint32(0),pts=view.getUint32(4);
+    if(!size||size>2097152)throw new Error('Invalid video frame size');
+    if(pending.length-offset<8+size)break;
+    const sample=H264Mux.accessUnit(pending.subarray(offset+8,offset+8+size));
+    sample.duration=Math.round(90000/(config.fps||60));
+    queue.push(H264Mux.fragment(sequence++,pts,[sample]));
+    lastFrame=Date.now();
+    offset+=8+size;
+    drain();
+    if(!video.paused){const live='Live from '+(config.platform||'console');if(message.textContent!==live)message.textContent=live;}
+    if(signal.aborted)break;
+   }
+   pending=pending.slice(offset);
+   if(pending.length>2097160)throw new Error('Incomplete video packet exceeded limit');
+  }
+  if(!stopped&&!signal.aborted)throw new Error('Video stream disconnected');
+ }catch(error){
+  if(!stopped)throw failure||error;
+ }finally{
+  controller.abort();
+  if(watchdog!==null)clearInterval(watchdog);
+  if(reader)reader.cancel().catch(()=>{});
+  if(source){
+   if(update)source.removeEventListener('updateend',update);
+   if(sourceError)source.removeEventListener('error',sourceError);
+  }
+  video.removeEventListener('waiting',waiting);
+  if(!video.requestVideoFrameCallback)video.removeEventListener('timeupdate',presented);
+  video.removeEventListener('playing',playing);
+  video.removeEventListener('error',decoderError);
+  if(currentPlayback===session)currentPlayback=null;
+  video.pause();video.removeAttribute('src');video.load();
+  if(mediaUrl)URL.revokeObjectURL(mediaUrl);
+ }
 }
-async function keepPlaying(){while(!stopped){try{await play();}catch(e){if(!stopped)message.textContent=e.message;}if(!stopped){message.textContent='Reconnecting to the console…';await new Promise(resolve=>setTimeout(resolve,1000));}}}
+async function keepPlaying(){
+ let errors=0;
+ while(!stopped){
+  try{await play();errors=0;}catch(e){if(!stopped){errors++;message.textContent=e.message||'Video disconnected';}}
+  if(!stopped){
+   message.textContent='Reconnecting to the console...';
+   await new Promise(resolve=>setTimeout(resolve,Math.min(1000*Math.max(1,errors),5000)));
+  }
+ }
+}
 document.addEventListener('visibilitychange',()=>{
  if(document.hidden){hiddenSince=Date.now();return;}
- if(!stopped&&hiddenSince&&Date.now()-hiddenSince>=60000)location.reload();
+ if(!stopped&&hiddenSince&&Date.now()-hiddenSince>=60000)restartViewer('Resuming video after background');
  hiddenSince=0;
 });
-window.addEventListener('pageshow',event=>{if(event.persisted&&!stopped)location.reload();});
+window.addEventListener('pageshow',e=>{if(e.persisted&&!stopped)restartViewer('Restoring video');});
 keepPlaying();updateStatus();listRecordings().catch(()=>{});setInterval(updateStatus,1000);
 </script><script>
 /* --- Audio PCM dal canale avcap2 -> Web Audio ---
  * Il viewer e' servito in HTTP semplice: AudioWorklet richiede un contesto
  * sicuro, quindi si usa ScriptProcessorNode (deprecato ma universale) con
  * una coda che regola il ritardo audio/video. */
-let audioCtx=null,audioSource=null,audioGain=null,audioOn=false,audioStopped=false;
+let audioCtx=null,audioSource=null,audioGain=null,audioOn=false,audioStopped=false,audioStarting=false,
+ audioController=null,audioStatsTimer=null;
 const audioBtn=document.getElementById('audio'),audiostats=document.getElementById('audiostats');
 const AQ={chunks:[],head:0,recv:0,played:0,under:0,ch:2,rate:48000,delayMs:120,peak:0,
  push(samples,ch){this.chunks.push(samples);this.recv+=samples.length/ch;this.ch=ch;
   for(let i=0;i<samples.length;i++){const a=samples[i]<0?-samples[i]:samples[i];if(a>this.peak)this.peak=a;}
-  if(this.recv-this.played>this.rate*3)this.played=this.recv-Math.round(this.rate*1.5);},
+  if(this.recv-this.played>this.rate*3)this.played=this.recv-Math.round(this.rate*1.5);
+  while(this.chunks.length>1&&this.recv-this.head>this.rate*2){this.head+=this.frames();this.chunks.shift();}
+  if(this.played<this.head)this.played=this.head;},
+ reset(){this.chunks=[];this.head=this.recv=this.played=this.under=0;this.peak=0;},
  frames(){return this.chunks.length?this.chunks[0].length/this.ch:0;},
  pull(out,frames){
   const delay=Math.round(this.delayMs*this.rate/1000);
@@ -160,6 +302,10 @@ function pcmToFloat(bytes,format,ch){
  return new Float32Array(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+f));
 }
 async function startAudio(){
+ if(audioOn||audioStarting)return;
+ audioStarting=true;
+ try{
+ AQ.reset();
  const cfg=window.pbsConfig&&window.pbsConfig.audio;if(!cfg)throw new Error('The console is not sending audio.');
  const rate=cfg.rate||48000,ch=cfg.channels||2;
  AQ.ch=ch;AQ.rate=rate;AQ.delayMs=Number(document.getElementById('delay').value);
@@ -175,7 +321,7 @@ async function startAudio(){
   AQ.pull(out,out[0]?out[0].length:bufferSize);
  };
  audioSource.connect(audioGain);
- setInterval(()=>{
+ audioStatsTimer=setInterval(()=>{
   if(!audioOn)return;
   const buf=Math.round(1000*Math.max(0,AQ.recv-AQ.played)/AQ.rate);
   const level=AQ.peak>=1e-5?`${(20*Math.log10(AQ.peak)).toFixed(0)} dBFS`:'silent';
@@ -183,19 +329,63 @@ async function startAudio(){
   AQ.peak=0;
  },250);
  audioOn=true;audioBtn.textContent='Sound on';audioBtn.classList.add('active');
- audioStreamLoop().catch((e)=>{message.textContent='Audio: '+e.message;});
+ audioStreamLoop().catch((e)=>{if(audioOn)audiostats.textContent='Audio reconnecting: '+e.message;});
+ }catch(e){stopAudio();throw e;}
+ finally{audioStarting=false;}
 }
-function stopAudio(){audioStopped=true;audioOn=false;audioBtn.textContent='Sound off';audioBtn.classList.remove('active');audiostats.textContent='';
+function stopAudio(){audioStopped=true;audioOn=false;if(audioController)audioController.abort();audioController=null;
+ if(audioStatsTimer!==null){clearInterval(audioStatsTimer);audioStatsTimer=null;}
+ audioBtn.textContent='Sound off';audioBtn.classList.remove('active');audiostats.textContent='';
  if(audioSource){audioSource.disconnect();audioSource.onaudioprocess=null;audioSource=null;}
  if(audioGain){audioGain.disconnect();audioGain=null;}
- if(audioCtx){audioCtx.close();audioCtx=null;}}
+ if(audioCtx){audioCtx.close();audioCtx=null;}AQ.reset();}
 async function audioStreamLoop(){
- const cfg=window.pbsConfig.audio,format=cfg.codec||'pcm_f32le',ch=cfg.channels||2;
- const response=await fetch('/audio',{cache:'no-store'});if(!response.ok)throw new Error('unable to open the audio stream');
- const reader=response.body.getReader();let pending=new Uint8Array();
- while(!audioStopped){const {value,done}=await reader.read();if(done)break;const merged=new Uint8Array(pending.length+value.length);merged.set(pending);merged.set(value,pending.length);pending=merged;let offset=0;
-  while(pending.length-offset>=8){const view=new DataView(pending.buffer,pending.byteOffset+offset);const size=view.getUint32(0);if(size>65536||pending.length-offset<8+size)break;AQ.push(pcmToFloat(pending.subarray(offset+8,offset+8+size),format,ch),ch);offset+=8+size;}
-  pending=pending.slice(offset);
+ let retries=0;
+ while(audioOn&&!audioStopped){
+  const controller=new AbortController();
+  audioController=controller;
+  let reader=null,lastAudio=Date.now();
+  const watchdog=setInterval(()=>{
+   if(!audioStopped&&audioOn&&!document.hidden&&Date.now()-lastAudio>9000)controller.abort();
+  },1000);
+  try{
+   const cfg=window.pbsConfig.audio,format=cfg.codec||'pcm_f32le',ch=cfg.channels||2;
+   const response=await fetch('/audio',{cache:'no-store',signal:controller.signal});
+   if(!response.ok||!response.body)throw new Error('Audio stream unavailable');
+   reader=response.body.getReader();
+   let pending=new Uint8Array();
+   while(audioOn&&!audioStopped&&!controller.signal.aborted){
+    const {value,done}=await reader.read();
+    if(done)break;
+    if(!value||!value.length)continue;
+    const merged=new Uint8Array(pending.length+value.length);
+    merged.set(pending);merged.set(value,pending.length);pending=merged;
+    let offset=0;
+    while(pending.length-offset>=8){
+     const view=new DataView(pending.buffer,pending.byteOffset+offset);
+     const size=view.getUint32(0);
+     if(!size||size>65536)throw new Error('Invalid audio packet');
+     if(pending.length-offset<8+size)break;
+     AQ.push(pcmToFloat(pending.subarray(offset+8,offset+8+size),format,ch),ch);
+     lastAudio=Date.now();
+     retries=0;
+     offset+=8+size;
+    }
+    pending=pending.slice(offset);
+    if(pending.length>65544)throw new Error('Oversized partial audio packet');
+   }
+  }catch(e){
+   if(audioOn&&!audioStopped)audiostats.textContent='Audio reconnecting...';
+  }finally{
+   clearInterval(watchdog);
+   controller.abort();
+   if(reader)reader.cancel().catch(()=>{});
+   if(audioController===controller)audioController=null;
+  }
+  if(audioOn&&!audioStopped){
+   retries=Math.min(retries+1,5);
+   await new Promise(resolve=>setTimeout(resolve,retries*500));
+  }
  }
 }
 audioBtn.onclick=async()=>{audioBtn.disabled=true;try{if(audioOn)stopAudio();else{audioStopped=false;await startAudio();}}catch(e){message.textContent='Audio: '+e.message;}finally{audioBtn.disabled=false;}};

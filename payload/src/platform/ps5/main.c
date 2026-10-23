@@ -22,6 +22,7 @@
 #include "common/http/server.h"
 #include "common/media/profiles.h"
 #include "common/process/inject.h"
+#include "platform/ps5/capture_fallback.h"
 #include "platform/ps5/offset_dump.h"
 #include "platform/ps5/offset/profile.h"
 #include "platform/ps5/module_dump.h"
@@ -501,7 +502,10 @@ int main(int argc, char **argv) {
     }
     const pbs_ps5_avcap2_offsets *avcap = &layout->avcap2;
     const pbs_ps5_remoteplay_offsets *rp = &layout->remoteplay;
-    if (avcap->request_size > 0x400 || avcap->request_size > sizeof scratch_zero - 8 ||
+    /* FW4.00 ends its request after the short 0x14-byte mask descriptor. */
+    const uint32_t mask_span = rp->mask_span ? rp->mask_span : 0x24;
+    if ((mask_span != 0x14 && mask_span != 0x24) ||
+        avcap->request_size > 0x400 || avcap->request_size > sizeof scratch_zero - 8 ||
         rp->rate.offset + 0x24 > avcap->request_size ||
         rp->image.offset + 0x10 > avcap->request_size ||
         rp->width_offset + 4 > avcap->request_size ||
@@ -509,7 +513,7 @@ int main(int argc, char **argv) {
         rp->paste_offset + 0x88 > avcap->request_size ||
         rp->video_mode_offset + 4 > avcap->request_size ||
         avcap->kind_offset + 4 > avcap->request_size ||
-        rp->mask_mode_offset + 0x24 > avcap->request_size) {
+        rp->mask_mode_offset + mask_span > avcap->request_size) {
       notify("PBS: invalid capture layout");
       return 1;
     }
@@ -613,9 +617,11 @@ avopen_retry:;
       param_u64(params, rp->mask_mode_offset + 4, 0x10);
       param_u32(params, rp->mask_mode_offset + 0xc, 1);
       params[rp->mask_mode_offset + 0x10] = 1;
-      param_u64(params, rp->mask_mode_offset + 0x14, 0x10);
-      params[rp->mask_mode_offset + 0x1c] = 1;
-      param_u32(params, rp->mask_mode_offset + 0x20, 0x6e);
+      if (mask_span == 0x24) {
+        param_u64(params, rp->mask_mode_offset + 0x14, 0x10);
+        params[rp->mask_mode_offset + 0x1c] = 1;
+        param_u32(params, rp->mask_mode_offset + 0x20, 0x6e);
+      }
       fprintf(f, "Params size=0x%x feature=%u usage=%u %dx%d fps-mode=%u fw=0x%08x\n",
               avcap->request_size, feature, usage, width, height, fps_mode, layout->firmware);
     }
@@ -755,11 +761,13 @@ avopen_cleanup:;
       clear_ok = clear_rc != LONG_MIN && (int32_t)(uint32_t)clear_rc >= 0;
     }
     clear_ok = clear_ok && owned_session_closed;
+    /* Retrying the smaller caller-owned profile is safe only after cleanup. */
     int fallback_1080 = live_request && automatic_resolution && clear_ok && !ctx.asserted &&
-        open_result == 0x81950008u && detected_video_mode == 0x10u &&
-        width == 2560 && height == 1440;
+        pbs_ps5_should_fallback_1080(layout->firmware, open_result,
+                                     detected_video_mode, width, height);
     if (fallback_1080)
-      fprintf(f, "OpenVideo busy at 1440p with video mode 0x10; retrying 1080p with feature 12\n");
+      fprintf(f, "OpenVideo rejected 1440p (0x%08x, video mode 0x%x); retrying 1080p with feature 12\n",
+              open_result, detected_video_mode);
     pbs_inject_end(&ctx);
     fclose(f);
     /* Reconfigure only after Stop/Close/ClearCallback completed for the old
