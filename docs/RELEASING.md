@@ -122,6 +122,7 @@ python -m unittest discover -s tests -p test_store_release.py
 | `Uploaded files do not match the manifest` | The artifact changed after hashing. Rebuild the payload instead of editing an asset. |
 | `cannot tell the platform` / store rejects a file | The filename must stay `PBS-Payload-<version>-<platform>.elf`: letters, digits, `.`, `_`, `+`, `-` and spaces only. |
 | `the SDK build finished without bin/<wrapper>` | The upstream build changed its layout; set `PS4_PAYLOAD_SDK_URL` / `PS5_PAYLOAD_SDK_URL` to a prebuilt tree. |
+| `ELF OS/ABI must be FreeBSD (9)` | Old Linux build validation rejected the official SDK's System V branding (0). Update the workflow source: `tools/verify_ps5_elf.py` accepts 0 and 9 while checking ELF64/x86-64, program extents, executable entry point and absence of a host interpreter. It never rewrites the ELF branding. |
 
 ## Manual fallback
 

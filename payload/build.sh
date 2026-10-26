@@ -314,13 +314,7 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
   fi
   "$compiler" "${includes[@]}" "$optimization" "${debug_flags[@]}" -Wall -Wextra -Wno-unused-parameter "${defines[@]}" "${sources[@]}" -o "$out/$filename"
   if [[ $platform == ps5 ]]; then
-    python3 - "$out/$filename" <<'PY'
-import pathlib
-import sys
-elf = pathlib.Path(sys.argv[1]).read_bytes()
-if len(elf) < 16 or elf[:4] != b"\x7fELF" or elf[7] != 9:
-    raise SystemExit("PS5 build rejected: ELF OS/ABI must be FreeBSD (9); use payload/build.ps1 with a compatible SDK")
-PY
+    python3 "$root/../tools/verify_ps5_elf.py" "$out/$filename"
   fi
   if [[ $platform == ps4 && $remote_avcap == 1 ]]; then
     python3 "$root/../tools/verify_ps4_worker_blob.py" "$out/$filename"
