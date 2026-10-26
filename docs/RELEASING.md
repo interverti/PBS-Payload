@@ -42,8 +42,10 @@ the launcher picks a payload from those three fields.
       `ps4-payload-dev/sdk` and `ps5-payload-dev/sdk`; point
       `PS4_PAYLOAD_SDK_REPO` / `PS5_PAYLOAD_SDK_REPO` and their `_REF` at a
       fork, a pinned tag or an internal mirror when those names do not match
-      your source), built once and cached by `actions/cache` under
-      `.sdk/<platform>`; bump `cache-key` in
+      your source), installed with `make DESTDIR=<private-prefix> install` for the official SDKs
+      (or their executable build script for custom repositories), then cached by `actions/cache` under
+      `.sdk/<platform>` (the Makefile installation is in `.installed/`);
+      the installer hash also invalidates old cache entries. Bump `cache-key` in
       `.github/actions/payload-sdk/action.yml` to force a rebuild.
 3. **Store credential.** Add the repository secret `RELEASE_CI_TOKEN`: the CI
    token of `https://store.seregonwar.com`, at least 32 characters. The store

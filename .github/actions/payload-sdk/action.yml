@@ -39,7 +39,7 @@ runs:
       continue-on-error: true
       with:
         path: .sdk/${{ inputs.platform }}
-        key: payload-sdk-${{ inputs.platform }}-${{ inputs.ref || inputs.cache-key }}
+        key: payload-sdk-${{ inputs.platform }}-${{ inputs.ref || inputs.cache-key }}-${{ hashFiles('.github/actions/payload-sdk/install-sdk.sh') }}
 
     - name: Install the SDK
       id: install

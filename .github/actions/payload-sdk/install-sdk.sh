@@ -51,12 +51,29 @@ if [[ -x $target/bin/$wrapper ]]; then
   exit 0
 fi
 
+if [[ -x $target/.installed/bin/$wrapper ]]; then
+  export_sdk "$target/.installed"
+  exit 0
+fi
+
 install_build_tools() {
-  command -v cmake >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 && return 0
+  local llvm_config= candidate
+  for candidate in llvm-config-{23,22,21,20,19,18,17,16,15} llvm-config; do
+    if command -v "$candidate" >/dev/null 2>&1; then llvm_config=$candidate; break; fi
+  done
+  if [[ -n $llvm_config ]] && command -v make >/dev/null 2>&1 &&
+     command -v clang >/dev/null 2>&1 && command -v ld.lld >/dev/null 2>&1 &&
+     command -v curl >/dev/null 2>&1 && command -v wget >/dev/null 2>&1; then
+    return 0
+  fi
   if command -v apt-get >/dev/null 2>&1; then
     echo "Installing the SDK build tools"
-    apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake ninja-build python3 curl unzip zlib1g-dev libssl-dev
+    local elevate=()
+    if [[ $(id -u) != 0 ]]; then elevate=(sudo -n); fi
+    "${elevate[@]}" apt-get update -qq
+    "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+      build-essential clang-18 llvm-18 lld-18 git wget cmake ninja-build \
+      python3 curl unzip zlib1g-dev libssl-dev
   fi
 }
 
@@ -127,15 +144,21 @@ for candidate in build.sh build; do
     break
   fi
 done
-if [[ -z $build_script ]]; then
-  echo "::error::$repo has no executable build script; provide $variable or ${variable%_SDK}_SDK_URL instead"
+if [[ -n $build_script ]]; then
+  echo "Building the SDK with $build_script"
+  ( cd "$target" && "$build_script" )
+  root=$(sdk_root "$target" || true)
+elif [[ -f $target/Makefile ]]; then
+  # Official SDKs use make install, not a build.sh entry point. Install into
+  # a private prefix; host/bin in the source is not an installed SDK tree.
+  root=$target/.installed
+  echo "Building and installing the SDK with make into $root"
+  make -C "$target" DESTDIR="$root" install
+else
+  echo "::error::$repo has no build script or Makefile; provide $variable or ${variable%_SDK}_SDK_URL instead"
   exit 1
 fi
-echo "Building the SDK with $build_script"
-( cd "$target" && "$build_script" )
-
-root=$(sdk_root "$target" || true)
-if [[ -z ${root:-} ]]; then
+if [[ -z ${root:-} || ! -x $root/bin/$wrapper ]]; then
   echo "::error::the SDK build finished without bin/$wrapper"
   exit 1
 fi

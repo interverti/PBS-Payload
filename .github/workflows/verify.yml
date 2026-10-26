@@ -38,6 +38,7 @@ jobs:
       - name: Release tooling checks
         run: |
           python3 -m unittest discover -s tests -p test_store_release.py
+          python3 -m unittest discover -s tests -p test_install_sdk.py
           python3 tools/store-release.py --help > /dev/null
           python3 tools/release-version.py check "$(python3 tools/release-version.py show)"
 
