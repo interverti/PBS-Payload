@@ -130,7 +130,7 @@ if ($PreflightOnly) {
   return
 }
 # A failed capture contains useful evidence and must not be replaced silently.
-foreach ($name in @('capture.txt', 'smoke.h264', 'http.txt', 'verification.json', 'first-frame.png')) {
+foreach ($name in @('capture.txt', 'problems.txt', 'smoke.h264', 'http.txt', 'verification.json', 'first-frame.png')) {
   if (Test-Path -LiteralPath (Join-Path $ArtifactsDir $name)) {
     throw "Refusing to overwrite existing $name in $ArtifactsDir. Choose a new -ArtifactsDir."
   }
@@ -204,6 +204,35 @@ $completedLog = Get-Content -LiteralPath $captureLog -Raw
 if ($completedLog -notmatch "(?m)^PBS PS4 fw=.* seconds=$CaptureSeconds usage=") {
   throw 'Runtime duration does not match the selected ELF. Preserve evidence and inspect the build.'
 }
+# The compact problem index records every detected problem the moment it
+# happens and ends with the first problem as root cause. Fetch it before any
+# failure decision can stop this runner.
+$problemsLog = Join-Path $artifacts 'problems.txt'
+& curl.exe --fail --silent --show-error --connect-timeout 5 --max-time 10 --remote-time --user anonymous:anonymous --output $problemsLog "$ftpBase/problems.txt"
+if ($LASTEXITCODE -ne 0) {
+  if (Test-Path -LiteralPath $problemsLog) { Remove-Item -LiteralPath $problemsLog -Force }
+  Write-Warning 'Compact problems.txt index unavailable over FTP; diagnosis falls back to capture.txt only.'
+}
+# Instant root-cause diagnosis from the preserved evidence, printed for every
+# run so a failed smoke is triaged without opening the full report by hand.
+$diagnoser = Join-Path $PSScriptRoot 'diagnose_ps4_log.py'
+$diagnosisText = ''
+if (Test-Path -LiteralPath $diagnoser) {
+  $diagnosisCommand = @($captureLog)
+  if (Test-Path -LiteralPath $problemsLog) { $diagnosisCommand += @('--problems', $problemsLog) }
+  # Capture stdout only: stderr must reach the console untouched and must not
+  # be turned into a terminating error record by ErrorActionPreference=Stop.
+  $diagnosisText = (& $python.Source $diagnoser $diagnosisCommand | Out-String).Trim()
+  if ($LASTEXITCODE -gt 1) {
+    Write-Warning "Diagnosis is inconclusive (exit $LASTEXITCODE); inspect $captureLog manually."
+  }
+  if ($diagnosisText) {
+    Write-Host 'PS4 problem diagnosis:'
+    Write-Host $diagnosisText
+  }
+} else {
+  Write-Warning "Diagnoser missing ($diagnoser); falling back to report regexes."
+}
 # Retrieve the diagnostic before an expected Open failure can stop this runner.
 if ($Ps4DaemonDump) {
   $dumpFile = Join-Path $artifacts 'daemon-dump.bin'
@@ -231,13 +260,19 @@ if ($Ps4VencJournal -and $completedLog -match '(?m)^Venc journal file: rc=0 ') {
 $runtimeFailure = $null
 if ($completedLog -match '(?m)^exit=([1-9][0-9]*)\s*$') {
   $failedExit = $Matches[1]
+  # Prefer the analyzer's root cause: it names the first real failure (with the
+  # decoded code and the operator hint) instead of a downstream symptom.
+  $primaryDetail = [regex]::Match($diagnosisText, '(?m)^\s+detail: (.*)$')
+  $primaryHint = [regex]::Match($diagnosisText, '(?m)^\s+hint:\s+(.*)$')
   # No smoke.h264 is created if OpenVideoEx fails before Start. Preserve and
   # report the real Avcap/cleanup failure, not a misleading FTP 550/78 error.
   $openFailure = [regex]::Match($completedLog, '(?m)^OpenVideoEx profile=\d+ -> [0-9a-f]{8} handle=.*$')
   $readFailure = [regex]::Match($completedLog, '(?m)^Remote ReadVideo failed rc=[0-9a-f]{8}.*$')
-  $cause = if ($readFailure.Success) { $readFailure.Value } elseif ($openFailure.Success) { $openFailure.Value } else { 'See capture.txt' }
+  $cause = if ($primaryDetail.Success) {
+    $primaryDetail.Groups[1].Value + $(if ($primaryHint.Success) { ' -> ' + $primaryHint.Groups[1].Value } else { '' })
+  } elseif ($readFailure.Success) { $readFailure.Value } elseif ($openFailure.Success) { $openFailure.Value } else { 'See capture.txt' }
   $slots = [regex]::Match($completedLog, '(?m)^Avcap encoder slots at final OpenVideoEx 80a70008: mask=([0-9a-f]{8}) slot0=([01]) \(read-only\)\s*$')
-  if ($slots.Success) {
+  if ($slots.Success -and -not $primaryHint.Success) {
     $cause += "; encoder slot mask=$($slots.Groups[1].Value), slot0=$($slots.Groups[2].Value) (read-only)"
   }
   $runtimeFailure = "PS4 smoke completed with exit=$failedExit; $cause; evidence preserved at $captureLog. No second ELF attempt."

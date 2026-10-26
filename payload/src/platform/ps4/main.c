@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /* PS4 Avcap backend. The HTTP viewer and RTP transport are shared with PS5. */
 #include "common/http/server.h"
+#include "common/diagnostics/problem_log.h"
 #include "platform/ps4/capture/capture.h"
 #include "platform/ps4/capture/request.h"
 #include "platform/ps4/system/control.h"
@@ -80,6 +81,9 @@ static void crash_report(int sig, siginfo_t *info, void *context) {
     line[42 + i] = digits[(address >> ((15 - i) * 4)) & 15];
   }
   if (crash_fd >= 0) write(crash_fd, line, sizeof line - 1);
+  /* The compact problem index must state the crash too: it is the first file
+   * a failed run is inspected with. Raw write, safe inside a handler. */
+  pbs_problem_raw(line, sizeof line - 1);
   _exit(128 + sig);
 }
 #endif
@@ -237,6 +241,15 @@ int main(int argc, char **argv) {
   FILE *log = fopen(PBS_PS4_CAPTURE_DIR "/capture.txt", "w");
   if (!log) return 1;
   setvbuf(log, NULL, _IONBF, 0);
+  /* Compact problem index next to the full report: on a failed run it is the
+   * first file to read, and it stays complete even if the report cannot be
+   * fetched. Records mirror into capture.txt as PROBLEM/SUMMARY lines. */
+  char problem_context[128];
+  snprintf(problem_context, sizeof problem_context,
+           "report=capture.txt fw=%08x usage=%d paste=%d wait_events=%d",
+           kernel_get_fw_version(), PBS_PS4_CAPTURE_USAGE, PBS_PS4_IMAGE_PASTE,
+           PBS_PS4_READ_WAIT_EVENTS);
+  pbs_problem_open(PBS_PS4_CAPTURE_DIR "/problems.txt", problem_context);
 #ifdef PBS_PS4_CAPTURE_SECONDS
   crash_fd = fileno(log);
   struct sigaction action = {.sa_sigaction = crash_report, .sa_flags = SA_SIGINFO};
@@ -265,7 +278,10 @@ int main(int argc, char **argv) {
     char *end;
     unsigned long number = strtoul(value, &end, 10);
     if (!*value || *end || (duration ? number > 60 : number < 1 || number > 65535)) {
-      fprintf(log, "Invalid option: %s\n", argv[i]); fclose(log); return 1;
+      fprintf(log, "Invalid option: %s\n", argv[i]);
+      pbs_problem_record(log, PBS_PROBLEM_FATAL, "startup", 0, 0, "Invalid option: %s", argv[i]);
+      pbs_problem_finish(log, 1);
+      fclose(log); return 1;
     }
     if (duration) seconds = (unsigned)number;
     else port = (int)number;
@@ -276,6 +292,11 @@ int main(int argc, char **argv) {
   const pbs_ps4_firmware *firmware = pbs_ps4_firmware_find(kernel_get_fw_version());
   if (!firmware) {
     fprintf(log, "PS4 kernel layout unavailable or unsupported; no capture or kernel patches attempted\n");
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "startup", 0, 0,
+                       "PS4 kernel layout unavailable or unsupported (fw=%08x); "
+                       "no capture or kernel patches attempted",
+                       kernel_get_fw_version());
+    pbs_problem_finish(log, 1);
     fclose(log);
     return 1;
   }
@@ -301,11 +322,18 @@ int main(int argc, char **argv) {
   FILE *smoke = NULL;
   uint64_t smoke_bytes = 0;
 #endif
-  if (pbs_ps4_capture_begin(log)) goto done;
+  if (pbs_ps4_capture_begin(log)) {
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "ownership", 0, 0,
+                       "capture begin refused: unresolved previous capture ownership/teardown");
+    goto done;
+  }
   ps4_static_state(log, "before init");
   int rc = pbs_ps4_init();
   fprintf(log, "Init -> %08x\n", rc);
-  if (rc < 0) goto cleanup;
+  if (rc < 0) {
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "init", rc, 0, "Avcap Init failed before any Open");
+    goto cleanup;
+  }
   initialized = 1;
   ps4_static_state(log, "after remote request");
 #if PBS_PS4_DAEMON_DUMP
@@ -316,6 +344,8 @@ int main(int argc, char **argv) {
   int dump_rc = pbs_ps4_daemon_dump(log, firmware, PBS_PS4_CAPTURE_DIR "/daemon-dump.bin");
   if (dump_rc == -2) {
     fprintf(log, "Daemon dump detach uncertain; refusing Open\n");
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "daemon-dump", 0, 0,
+                       "daemon dump detach uncertain; refusing Open");
     goto cleanup;
   }
 #endif
@@ -328,18 +358,28 @@ capture_open:
   uint32_t params[PBS_PS4_VIDEO_REQUEST_WORDS];
 #if PBS_PS4_REMOTE_1080
   if (pbs_ps4_make_video_request_remote_1080(params, (unsigned)height, PBS_PS4_CAPTURE_USAGE,
-      PBS_PS4_IMAGE_PASTE, PBS_PS4_CAPTURE_FPS)) goto cleanup;
+      PBS_PS4_IMAGE_PASTE, PBS_PS4_CAPTURE_FPS)) {
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "request", 0, 0,
+        "RemotePlay 1080p30 request rejected by ABI guard for %dp%d", height, PBS_PS4_CAPTURE_FPS);
+    goto cleanup;
+  }
   fprintf(log, "RemotePlay 1080p30: profiles=%u/%u request[0x30]=%u; native_source=%u Neo budget disabled\n",
       params[2],params[3],params[0x30/4],(unsigned)PBS_PS4_NATIVE_SOURCE);
 #elif PBS_PS4_LOW_MEMORY
   if (pbs_ps4_make_video_request_low_memory(params, (unsigned)height, PBS_PS4_CAPTURE_USAGE,
-                                 PBS_PS4_IMAGE_PASTE, PBS_PS4_CAPTURE_FPS))
+                                 PBS_PS4_IMAGE_PASTE, PBS_PS4_CAPTURE_FPS)) {
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "request", 0, 0,
+        "Low-memory 1080p30 request rejected by ABI guard for %dp%d", height, PBS_PS4_CAPTURE_FPS);
     goto cleanup;
+  }
   fprintf(log, "Low-memory 1080p30: request[0x30]=%u; native 24MiB pool, Neo budget flag disabled\n", params[0x30/4]);
 #else
   if (pbs_ps4_make_video_request_at_rate(params, (unsigned)height, PBS_PS4_CAPTURE_USAGE,
-                                 PBS_PS4_IMAGE_PASTE, PBS_PS4_CAPTURE_FPS))
+                                 PBS_PS4_IMAGE_PASTE, PBS_PS4_CAPTURE_FPS)) {
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "request", 0, 0,
+        "video request rejected by ABI guard for %dp%d", height, PBS_PS4_CAPTURE_FPS);
     goto cleanup;
+  }
 #endif
   fprintf(log, "Avcap request usage=%u profile=%u bitrate_coefficients=%u,%u\n",
           params[1], params[2], params[0x40 / 4], params[0x44 / 4]);
@@ -366,9 +406,13 @@ capture_open:
     ++busy_retries;
     usleep(16000);
   } while (milliseconds() - open_began < 2016u);
-  if (busy_retries)
+  if (busy_retries) {
     fprintf(log, "OpenVideoEx transient 80a70008 retries=%u elapsed_ms=%llu\n",
             busy_retries, (unsigned long long)(milliseconds() - open_began));
+    pbs_problem_record(log, PBS_PROBLEM_NOTE, "open", (int)0x80a70008u, 0,
+                       "transient 80a70008: %u bounded retries in %llums (native behavior)",
+                       busy_retries, (unsigned long long)(milliseconds() - open_began));
+  }
   fprintf(log, "OpenVideoEx profile=%u -> %08x handle=%p\n", params[2], rc, handle);
 #if defined(PBS_PS4_CAPTURE_SECONDS) || defined(PBS_PS4_TEST_OPEN_SLOTS)
   if ((uint32_t)rc == 0x80a70008u)
@@ -379,6 +423,9 @@ capture_open:
      * finishes. A failed Open can poison that slot even with *out=NULL;
      * retrying blindly can create a second owner or leak the first one. */
     fprintf(log, "OpenVideoEx failure quarantined; not reopening an unknown capture slot\n");
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "open", rc, 0,
+                       "OpenVideoEx profile=%u failed and is quarantined; no reopen of an unknown slot",
+                       params[2]);
     handle = NULL;
     status = 1;
     goto cleanup;
@@ -415,22 +462,41 @@ capture_open:
   ps4_static_state(log, "after Pre-Start GetInfo");
 #endif
   if (sps_len <= 0 || sps_len > 128 || pps_len <= 0 || pps_len > 128 ||
-      (sps[0] & 31) != 7 || (pps[0] & 31) != 8) goto capture_retry;
+      (sps[0] & 31) != 7 || (pps[0] & 31) != 8) {
+    /* This path used to retry silently: the only evidence was the GetInfo line
+     * above. State the exact header outcome so a failed run is diagnosed from
+     * the problem index alone. */
+    pbs_problem_record(log, PBS_PROBLEM_FAIL, "prestart", 0, 0,
+                       "pre-Start headers invalid: SPS=%d PPS=%d nal=%02x/%02x",
+                       sps_len, pps_len, sps_len > 0 ? sps[0] & 31 : 0,
+                       pps_len > 0 ? pps[0] & 31 : 0);
+    goto capture_retry;
+  }
 #if PBS_PS4_ENCODER_STATE
   int before_snapshot_rc = pbs_ps4_encoder_snapshot(log, firmware,
       PBS_PS4_CAPTURE_DIR "/encoder-before-start.bin");
   fprintf(log, "Encoder before-Start snapshot rc=%d\n", before_snapshot_rc);
-  if (before_snapshot_rc == -2) goto cleanup;
+  if (before_snapshot_rc == -2) {
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "encoder-snapshot", 0, 0,
+                       "before-Start encoder snapshot failed; diagnostic integrity uncertain");
+    goto cleanup;
+  }
 #endif
 #if PBS_PS4_VENC_JOURNAL
   if (pbs_ps4_venc_journal_apply(log, firmware)) {
     fprintf(log, "Venc journal unavailable; refusing diagnostic Start\n");
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "venc-journal", 0, 0,
+                       "venc journal unavailable; refusing diagnostic Start");
     goto cleanup;
   }
 #endif
   rc = pbs_ps4_start(handle);
   fprintf(log, "Start -> %08x\n", rc);
-  if (rc < 0) goto capture_retry;
+  if (rc < 0) {
+    pbs_problem_record(log, PBS_PROBLEM_FAIL, "start", rc, 0,
+                       "Avcap Start failed after valid pre-Start headers");
+    goto capture_retry;
+  }
   started = 1;
 #if PBS_PS4_ENCODER_STATE
   /* Post-Start / pre-Read snapshot: positive control for the scan-in model.
@@ -444,17 +510,25 @@ capture_open:
   int after_start_snapshot_rc = pbs_ps4_encoder_snapshot(log, firmware,
       PBS_PS4_CAPTURE_DIR "/encoder-after-start.bin");
   fprintf(log, "Encoder after-Start snapshot rc=%d\n", after_start_snapshot_rc);
-  if (after_start_snapshot_rc == -2) goto cleanup;
+  if (after_start_snapshot_rc == -2) {
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "encoder-snapshot", 0, 0,
+                       "after-Start encoder snapshot failed; diagnostic integrity uncertain");
+    goto cleanup;
+  }
 #endif
   ps4_static_state(log, "after Start");
   if (!frame) frame = pbs_video_alloc(0x200000);
   pbs_audio_configure("none", 0, 0);
   if (!frame) {
     fprintf(log, "Frame buffer allocation failed errno=%d\n", errno);
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "memory", 0, errno,
+                       "frame buffer allocation failed");
     goto capture_retry;
   }
   if (pbs_h264_server_start_at_rate(port, width, height, PBS_PS4_CAPTURE_FPS, sps, sps_len, pps, pps_len)) {
     fprintf(log, "HTTP server failed on port %d errno=%d\n", port, errno);
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "http", 0, errno,
+                       "HTTP server failed on port %d", port);
     goto capture_retry;
   }
   /* A second client may POST /capture/restart while Open/GetInfo/Start is
@@ -496,6 +570,9 @@ capture_open:
       fprintf(log, "Keyframe request\n");
       int key_rc = pbs_ps4_keyframe(handle);
       fprintf(log, "Keyframe -> %08x\n", key_rc);
+      if (key_rc < 0)
+        pbs_problem_record(log, PBS_PROBLEM_FAIL, "keyframe", key_rc, 0,
+                           "requested IDR was refused by Avcap");
     }
     unsigned char info[0x40] = {0};
     /* FW11 native RP uses flags=0; libSceAvcap+0x1500 retries its wait on
@@ -513,13 +590,24 @@ capture_open:
        * reader has already resynchronized its cursor; request a new IDR and
        * make both recording and clients wait for the new generation. */
       fprintf(log, "Avcap ring overrun; resynchronized, requesting IDR\n");
+      pbs_problem_record(log, PBS_PROBLEM_WARN, "read", (int)0x80a70004u, 0,
+                         "ring overrun at packet %llu; reader resynchronized and requested IDR",
+                         (unsigned long long)overall_packets);
       pbs_h264_discontinuity();
-      if (pbs_ps4_keyframe(handle) < 0) { publish_failed = 1; break; }
+      if (pbs_ps4_keyframe(handle) < 0) {
+        pbs_problem_record(log, PBS_PROBLEM_FATAL, "keyframe", 0, 0,
+                           "IDR request after ring overrun failed; capture cannot continue");
+        publish_failed = 1;
+        break;
+      }
       continue;
     }
     if (rc < 0) {
       fprintf(log, "Remote ReadVideo failed rc=%08x; ending capture before further target calls\n",
               (unsigned)rc);
+      pbs_problem_record(log, PBS_PROBLEM_FATAL, "read", rc, 0,
+                         "Remote ReadVideo failed after %llu packets; capture ended",
+                         (unsigned long long)overall_packets);
 #if PBS_PS4_ENCODER_STATE
       int snapshot_rc = pbs_ps4_encoder_snapshot(log, firmware,
           PBS_PS4_CAPTURE_DIR "/encoder-state.bin");
@@ -562,6 +650,8 @@ capture_open:
       if (pbs_h264_publish(frame, rc, pbs_ps4_pts90k_at_rate(overall_packets, PBS_PS4_CAPTURE_FPS))) {
         fprintf(log, "H264 publish failed after %llu frames; stopping capture (no false streaming success)\n",
                 (unsigned long long)overall_packets);
+        pbs_problem_record(log, PBS_PROBLEM_FATAL, "publish", 0, 0,
+                           "H264 publish failed after %llu frames", (unsigned long long)overall_packets);
         publish_failed = 1;
         break;
       }
@@ -570,6 +660,9 @@ capture_open:
     } else {
       if (milliseconds() - last_frame > 3000) {
         fprintf(log, "ReadVideo stalled rc=%08x errno=%d\n", rc, errno);
+        pbs_problem_record(log, PBS_PROBLEM_FAIL, "read", rc, errno,
+                           "ReadVideo stalled >3000ms after %llu packets; requesting recovery",
+                           (unsigned long long)overall_packets);
         needs_restart = 1;
         break;
       }
@@ -589,6 +682,10 @@ capture_open:
         count >= 90 && total / count < 128) {
       fprintf(log, "SUSPECTED EMPTY SCAN-IN: %llu packets %llu bytes, requesting one diagnostic Avcap reopen\n",
               (unsigned long long)count, (unsigned long long)total);
+      pbs_problem_record(log, PBS_PROBLEM_WARN, "source", 0, 0,
+                         "suspected empty scan-in: %llu packets %llu bytes in %llums",
+                         (unsigned long long)count, (unsigned long long)total,
+                         (unsigned long long)(milliseconds() - began));
       empty_source_reopened = 1;
       needs_restart = 1;
       break;
@@ -601,8 +698,12 @@ capture_open:
   fprintf(log, "session packets=%llu bytes=%llu min=%zu max=%zu elapsed_ms=%llu fps=%.2f mbps=%.5f\n",
     (unsigned long long)count, (unsigned long long)total, count ? min_packet : 0,
     max_packet, (unsigned long long)elapsed_ms, fps, mbps);
-  if (elapsed_ms >= 2000 && count >= 60 && mbps < 0.10)
+  if (elapsed_ms >= 2000 && count >= 60 && mbps < 0.10) {
     fprintf(log, "WARNING: unusually low H.264 output rate; inspect decoded frames, source/scan-in unverified\n");
+    pbs_problem_record(log, PBS_PROBLEM_WARN, "stream", 0, 0,
+                       "unusually low H.264 output: %llu packets %.5f mbps in %llums",
+                       (unsigned long long)count, mbps, (unsigned long long)elapsed_ms);
+  }
   if (overall_packets && !publish_failed) status = 0;
   /* The payload cannot decode the hardware stream. This status only proves
    * packets were delivered to PBS; actual visible pixels require external
@@ -615,7 +716,10 @@ capture_retry:
   if (started) {
     int stop_rc = pbs_ps4_stop(handle);
     fprintf(log, "Stop -> %08x\n", stop_rc);
-    if (stop_rc < 0) recovery_failed = 1;
+    if (stop_rc < 0) {
+      pbs_problem_record(log, PBS_PROBLEM_FAIL, "stop", stop_rc, 0, "Avcap Stop failed during recovery");
+      recovery_failed = 1;
+    }
     started = 0;
     ps4_static_state(log, "after Stop");
   }
@@ -625,7 +729,10 @@ capture_retry:
 #if defined(PBS_PS4_CAPTURE_SECONDS) || defined(PBS_PS4_TEST_OPEN_SLOTS)
     ps4_open_slot_snapshot(log, "after retry Close");
 #endif
-    if (close_rc < 0) recovery_failed = 1;
+    if (close_rc < 0) {
+      pbs_problem_record(log, PBS_PROBLEM_FAIL, "close", close_rc, 0, "Avcap Close failed during recovery");
+      recovery_failed = 1;
+    }
     handle = NULL;
   }
   /* Close invalidates the local Avcap handle even if its service teardown
@@ -633,6 +740,8 @@ capture_retry:
    * followed by another Open. Report failure and release the RP request. */
   if (recovery_failed) {
     fprintf(log, "Avcap cleanup failed; refusing to reopen a potentially active resource\n");
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "cleanup", 0, 0,
+                       "Avcap cleanup failed; refusing to reopen a potentially active resource");
     status = 1;
     goto cleanup;
   }
@@ -640,6 +749,8 @@ capture_retry:
       (deadline && milliseconds() >= deadline)) {
     status = 1;
     fprintf(log, "Avcap recovery incomplete after %u attempts\n", retries);
+    pbs_problem_record(log, PBS_PROBLEM_FATAL, "recovery", 0, 0,
+                       "Avcap recovery incomplete after %u attempts", retries);
     goto cleanup;
   }
   ++retries;
@@ -663,17 +774,28 @@ cleanup:
   if (pbs_ps4_venc_journal_pending()) {
     int journal_rc = pbs_ps4_venc_journal_finish(log,
         PBS_PS4_CAPTURE_DIR "/venc-journal.bin");
-    if (journal_rc) { fprintf(log, "Venc journal finish failed rc=%d\n", journal_rc); status=1; }
+    if (journal_rc) {
+      fprintf(log, "Venc journal finish failed rc=%d\n", journal_rc);
+      pbs_problem_record(log, PBS_PROBLEM_FAIL, "venc-journal", journal_rc, 0,
+                         "venc journal finish failed");
+      status = 1;
+    }
     if (pbs_ps4_venc_journal_pending()) {
       fprintf(log, "Venc journal ownership uncertain; capture quarantined, reboot required\n");
-      status=1;goto done;
+      pbs_problem_record(log, PBS_PROBLEM_FATAL, "venc-journal", 0, 0,
+                         "venc journal ownership uncertain; capture quarantined, reboot required");
+      status = 1;
+      goto done;
     }
   }
 #endif
   if (started) {
     int stop_rc = pbs_ps4_stop(handle);
     fprintf(log, "Stop -> %08x\n", stop_rc);
-    if (stop_rc < 0) status = 1;
+    if (stop_rc < 0) {
+      pbs_problem_record(log, PBS_PROBLEM_FAIL, "stop", stop_rc, 0, "Avcap Stop failed at teardown");
+      status = 1;
+    }
   }
   if (handle) {
     int close_rc = pbs_ps4_close(handle);
@@ -681,17 +803,26 @@ cleanup:
 #if defined(PBS_PS4_CAPTURE_SECONDS) || defined(PBS_PS4_TEST_OPEN_SLOTS)
     ps4_open_slot_snapshot(log, "after final Close");
 #endif
-    if (close_rc < 0) status = 1;
+    if (close_rc < 0) {
+      pbs_problem_record(log, PBS_PROBLEM_FAIL, "close", close_rc, 0, "Avcap Close failed at teardown");
+      status = 1;
+    }
   }
   if (initialized) {
     ps4_static_state(log, "before term");
     int term_rc = pbs_ps4_term();
     fprintf(log, "Term -> %08x\n", term_rc);
-    if (term_rc < 0) status = 1;
+    if (term_rc < 0) {
+      pbs_problem_record(log, PBS_PROBLEM_FAIL, "term", term_rc, 0, "Avcap Term failed at teardown");
+      status = 1;
+    }
   }
   pbs_ps4_capture_end();
 done:
   fprintf(log, "exit=%d\n", status);
+  /* The SUMMARY names the first problem (usually the root cause) and is the
+   * last thing a reader needs from the compact index. */
+  pbs_problem_finish(log, status);
   fclose(log);
   return status;
 }

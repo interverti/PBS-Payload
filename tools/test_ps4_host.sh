@@ -14,6 +14,7 @@ run() {
   "$out/$name"
 }
 run firmware tests/ps4/system/firmware.c
+run problem-log tests/common/problem_log.c payload/src/common/diagnostics/problem_log.c
 run layout tests/ps4/system/layout.c payload/src/platform/ps4/system/layout.c
 run layout-runtime -DPBS_PS4_DYNAMIC_LAYOUT=1 -DPBS_TEST_CONTROL -DKERNEL_IMAGE_SIZE=0x100000 tests/ps4/system/layout_runtime.c payload/src/platform/ps4/system/layout_runtime.c
 run export-reader tests/ps4/capture/export_reader.c payload/src/platform/ps4/capture/export_reader.c
@@ -80,4 +81,6 @@ record_dir=$(mktemp -d "$PWD/$out/recording.XXXXXX")
 "$out/http-record" "$record_dir"
 python3 -m unittest discover -s tests -p test_verify_ps4_capture.py
 python3 -m unittest discover -s tests -p test_inspect_ps4_venc_journal.py
+python3 -m unittest discover -s tests -p test_diagnose_ps4_log.py
+python3 -m unittest discover -s tests -p test_store_release.py
 printf 'PS4 offline regression passed. No console connection made.\n'

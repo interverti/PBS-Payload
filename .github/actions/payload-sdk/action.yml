@@ -1,0 +1,52 @@
+name: Payload SDK
+description: >-
+  Provision the PS4 (orbis) or PS5 (prospero) payload SDK used by
+  payload/build.sh and export its path. Uses a preinstalled SDK when one is
+  already in the job environment, otherwise a downloadable archive, otherwise
+  builds the upstream SDK once and caches the result.
+
+inputs:
+  platform:
+    description: ps4 or ps5
+    required: true
+  url:
+    description: Archive with a prebuilt SDK tree; empty means build the upstream SDK
+    required: false
+    default: ""
+  repo:
+    description: Upstream SDK repository to build when no archive is given
+    required: false
+    default: ""
+  ref:
+    description: Upstream branch or tag to build
+    required: false
+    default: ""
+  cache-key:
+    description: Bump to invalidate the cached SDK tree
+    required: false
+    default: v1
+
+outputs:
+  path:
+    description: The SDK directory handed to payload/build.sh
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Cache the SDK tree
+      uses: actions/cache@v4
+      continue-on-error: true
+      with:
+        path: .sdk/${{ inputs.platform }}
+        key: payload-sdk-${{ inputs.platform }}-${{ inputs.ref || inputs.cache-key }}
+
+    - name: Install the SDK
+      id: install
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+        SDK_URL: ${{ inputs.url }}
+        SDK_REPO: ${{ inputs.repo }}
+        SDK_REF: ${{ inputs.ref }}
+      run: bash "${{ github.action_path }}/install-sdk.sh"

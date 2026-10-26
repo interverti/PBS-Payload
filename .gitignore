@@ -1,5 +1,6 @@
 # Generated builds and developer state
 **/build/
+.sdk/
 **/.gradle/
 **/.cxx/
 **/local.properties
@@ -42,3 +43,4 @@ docs/PS5_1270_VIDEO_MODE_TRACE.txt
 docs/PS5_FIRMWARE_OFFSETS.txt
 docs/PS5_VIDEO_MODE_CROSS_FIRMWARE_AUDIT.txt
 *.txt
+!docs/RELEASING.md

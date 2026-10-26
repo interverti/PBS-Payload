@@ -50,6 +50,7 @@ def build(cc, probe_empty=False, fail_publish=False, source_barrier=False, nativ
     subprocess.run(flags + linking + [str(OUT / "entry.o"),
                             str(ROOT / "tests" / "ps4/capture/mock_avcap.c"),
                             str(source / "common/http/server.c"),
+                            str(source / "common/diagnostics/problem_log.c"),
                             "-o", str(OUT / "mock-server")], cwd=ROOT, check=True)
 
 

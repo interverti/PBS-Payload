@@ -198,7 +198,7 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
       sources+=("$root/src/platform/ps4/capture/remote.c" "$root/src/platform/ps4/worker/client.c" "$root/src/platform/ps4/worker/remote.c" "$root/src/platform/ps4/worker/boot.c")
       if [[ $worker_boot == 1 ]]; then sources+=("$root/src/platform/ps4/capture/export_reader.c"); fi
     fi
-    sources+=("$root/src/platform/ps4/system/control.c" "$root/src/common/process/inject.c" "$root/src/common/http/server.c" "$root/src/platform/ps4/system/credentials.c")
+    sources+=("$root/src/platform/ps4/system/control.c" "$root/src/common/process/inject.c" "$root/src/common/http/server.c" "$root/src/common/diagnostics/problem_log.c" "$root/src/platform/ps4/system/credentials.c")
     if [[ $dynamic_layout == 1 ]]; then sources+=("$root/src/platform/ps4/system/layout.c" "$root/src/platform/ps4/system/layout_runtime.c"); fi
     if [[ $admission_probe == 1 || $low_memory == 1 || $encoder_state == 1 ]]; then
       sources+=("$root/src/platform/ps4/diagnostics/snapshot.c" "$root/src/platform/ps4/diagnostics/admission.c")

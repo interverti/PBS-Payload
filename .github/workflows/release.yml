@@ -1,0 +1,278 @@
+name: Release
+
+# Manual on purpose: every run builds console payloads and may publish a store
+# version, so nothing here may start from a push or a tag. See
+# docs/RELEASING.md for the whole procedure.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic version, e.g. 0.2.0 or 0.2.0-beta.1; the numeric part must match VERSION
+        required: true
+        type: string
+      platforms:
+        description: Consoles to build and publish
+        type: choice
+        options:
+          - ps4,ps5
+          - ps5
+          - ps4
+        default: ps4,ps5
+      publish:
+        description: Register in the Seregon Store and publish the GitHub release; off leaves a draft for inspection
+        type: boolean
+        default: false
+      runs_on:
+        description: Runner label for the payload builds; use a self-hosted label when the SDK is preinstalled
+        type: string
+        default: ubuntu-24.04
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  identity:
+    name: Validate ${{ inputs.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      channel: ${{ steps.version.outputs.channel }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      release_name: ${{ steps.version.outputs.release_name }}
+      platforms: ${{ steps.selection.outputs.platforms }}
+      platforms_json: ${{ steps.selection.outputs.platforms_json }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the version against VERSION
+        id: version
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: python3 tools/release-version.py check "$REQUESTED"
+
+      - name: Resolve the platform selection
+        id: selection
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          raw = os.environ.get("PLATFORMS", "")
+          tokens = [item.strip().lower() for item in raw.replace(" ", ",").split(",") if item.strip()]
+          allowed = ("ps4", "ps5")
+          unknown = [item for item in tokens if item not in allowed]
+          if unknown or not tokens:
+              print(f"::error::unsupported platform selection {raw!r}", file=sys.stderr)
+              raise SystemExit(1)
+          ordered = [item for item in allowed if item in tokens]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write("platforms=" + ",".join(ordered) + "\n")
+              out.write("platforms_json=" + json.dumps(ordered) + "\n")
+          PY
+
+      - name: Create or reuse the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_NAME: ${{ steps.version.outputs.release_name }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            draft=$(gh release view "$TAG" --json isDraft --jq .isDraft)
+            if [ "$draft" != "true" ]; then
+              echo "::error::$TAG is already published; published files are immutable, release a new version"
+              exit 1
+            fi
+            echo "Reusing the draft release $TAG"
+            exit 0
+          fi
+          flags=(--draft --title "$RELEASE_NAME" --target "$GITHUB_SHA")
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" "${flags[@]}" --generate-notes ||
+            gh release create "$TAG" "${flags[@]}" --notes "PBS Payload $TAG"
+
+  build:
+    name: ${{ matrix.platform }} payload
+    needs: identity
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.identity.outputs.platforms_json) }}
+        include:
+          - platform: ps5
+            sdk_url: ${{ vars.PS5_PAYLOAD_SDK_URL }}
+            sdk_repo: ${{ vars.PS5_PAYLOAD_SDK_REPO }}
+            sdk_ref: ${{ vars.PS5_PAYLOAD_SDK_REF }}
+          - platform: ps4
+            sdk_url: ${{ vars.PS4_PAYLOAD_SDK_URL }}
+            sdk_repo: ${{ vars.PS4_PAYLOAD_SDK_REPO }}
+            sdk_ref: ${{ vars.PS4_PAYLOAD_SDK_REF }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Payload SDK
+        uses: ./.github/actions/payload-sdk
+        with:
+          platform: ${{ matrix.platform }}
+          url: ${{ matrix.sdk_url }}
+          repo: ${{ matrix.sdk_repo }}
+          ref: ${{ matrix.sdk_ref }}
+
+      - name: Build the PS5 payload
+        if: matrix.platform == 'ps5'
+        run: bash payload/build.sh ps5 stream
+
+      - name: Build the PS4 payload
+        if: matrix.platform == 'ps4'
+        env:
+          PBS_PS4_REMOTE_AVCAP: "1"
+        run: bash payload/build.sh ps4 stream
+
+      - name: Stage and upload the release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.identity.outputs.tag }}
+          VERSION: ${{ needs.identity.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          case "$PLATFORM" in
+            ps5) built=payload/build/ps5/pbs.elf ;;
+            ps4) built=payload/build/ps4/pbs-remote-stream.elf ;;
+            *) echo "::error::unknown platform $PLATFORM"; exit 1 ;;
+          esac
+          test -s "$built"
+          asset="PBS-Payload-$VERSION-$PLATFORM.elf"
+          mkdir -p staging
+          install -m 0644 "$built" "staging/$asset"
+          ( cd staging && sha256sum "$asset" > "$asset.sha256" )
+          file "staging/$asset"
+          sha256sum "staging/$asset"
+          gh release upload "$TAG" staging/* --clobber
+
+  checksums:
+    name: Verify the assets
+    needs: [identity, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download and verify every asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          gh release download "$TAG" --dir assets --clobber
+          cd assets
+          ls -l
+          sha256sum -c --strict ./*.sha256
+          sha256sum ./*.elf > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload the combined checksum list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.identity.outputs.tag }}
+        run: gh release upload "$TAG" assets/SHA256SUMS.txt --clobber
+
+  store:
+    name: Seregon Store
+    needs: [identity, checksums]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          gh release download "$TAG" --dir assets --clobber
+          cd assets
+          sha256sum -c --strict ./*.sha256
+
+      - name: Read the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.identity.outputs.tag }}
+        run: gh release view "$TAG" --json body --jq .body > notes.md
+
+      - name: Store manifest (dry run)
+        if: ${{ !inputs.publish }}
+        env:
+          VERSION: ${{ needs.identity.outputs.version }}
+          CHANNEL: ${{ needs.identity.outputs.channel }}
+          PLATFORMS: ${{ needs.identity.outputs.platforms }}
+        run: >-
+          python3 tools/store-release.py
+          --dir assets
+          --version "$VERSION"
+          --channel "$CHANNEL"
+          --platforms "$PLATFORMS"
+          --notes-file notes.md
+          --dry-run
+
+      - name: Register and publish the store version
+        if: ${{ inputs.publish }}
+        env:
+          RELEASE_CI_TOKEN: ${{ secrets.RELEASE_CI_TOKEN }}
+          VERSION: ${{ needs.identity.outputs.version }}
+          CHANNEL: ${{ needs.identity.outputs.channel }}
+          PLATFORMS: ${{ needs.identity.outputs.platforms }}
+        run: >-
+          python3 tools/store-release.py
+          --dir assets
+          --version "$VERSION"
+          --channel "$CHANNEL"
+          --platforms "$PLATFORMS"
+          --notes-file notes.md
+          --publish
+
+  publish:
+    name: Publish the GitHub release
+    needs: [identity, store]
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Leave the draft state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.identity.outputs.tag }}
+          CHANNEL: ${{ needs.identity.outputs.channel }}
+        run: |
+          set -euo pipefail
+          latest=true
+          if [ "$CHANNEL" != "stable" ]; then
+            latest=false
+          fi
+          gh release edit "$TAG" --draft=false --latest="$latest"
+          gh release view "$TAG" --json isDraft,isPrerelease,url \
+            --jq '"draft=\(.isDraft) prerelease=\(.isPrerelease) \(.url)"'

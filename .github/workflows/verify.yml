@@ -1,0 +1,86 @@
+name: Verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      payloads:
+        description: Cross-build the console payloads (needs a payload SDK; see docs/RELEASING.md)
+        type: boolean
+        default: true
+      runs_on:
+        description: Runner label for the payload builds; use a self-hosted label when the SDK is preinstalled
+        type: string
+        default: ubuntu-24.04
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: Offline host regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the host toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential python3
+
+      - name: Offline PS4 regression (no console connection)
+        run: bash tools/test_ps4_host.sh
+
+      - name: Release tooling checks
+        run: |
+          python3 -m unittest discover -s tests -p test_store_release.py
+          python3 tools/store-release.py --help > /dev/null
+          python3 tools/release-version.py check "$(python3 tools/release-version.py show)"
+
+  payload:
+    name: ${{ matrix.platform }} payload build
+    if: ${{ inputs.payloads }}
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ps5
+            artifact: payload/build/ps5/pbs.elf
+            sdk_url: ${{ vars.PS5_PAYLOAD_SDK_URL }}
+            sdk_repo: ${{ vars.PS5_PAYLOAD_SDK_REPO }}
+            sdk_ref: ${{ vars.PS5_PAYLOAD_SDK_REF }}
+          - platform: ps4
+            artifact: payload/build/ps4/pbs-remote-stream.elf
+            avcap: "1"
+            sdk_url: ${{ vars.PS4_PAYLOAD_SDK_URL }}
+            sdk_repo: ${{ vars.PS4_PAYLOAD_SDK_REPO }}
+            sdk_ref: ${{ vars.PS4_PAYLOAD_SDK_REF }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Payload SDK
+        uses: ./.github/actions/payload-sdk
+        with:
+          platform: ${{ matrix.platform }}
+          url: ${{ matrix.sdk_url }}
+          repo: ${{ matrix.sdk_repo }}
+          ref: ${{ matrix.sdk_ref }}
+
+      - name: Build the ${{ matrix.platform }} payload
+        env:
+          PBS_PS4_REMOTE_AVCAP: ${{ matrix.avcap }}
+        run: bash payload/build.sh ${{ matrix.platform }} stream
+
+      - name: Inspect the ELF
+        run: |
+          artifact='${{ matrix.artifact }}'
+          test -s "$artifact"
+          file "$artifact"
+          file "$artifact" | grep -q 'ELF 64-bit'
+          sha256sum "$artifact"
