@@ -118,6 +118,15 @@ static uint64_t capture_clock_ms(void) {
   return (uint64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
 }
 
+/* The encoder can deliver fewer than the requested 60 frames/s. Timestamp
+ * actual publication time so playback does not consume the stream faster
+ * than capture produces it. The HTTP wire clock wraps naturally at 32 bits. */
+static uint64_t capture_clock_90k(void) {
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (uint64_t)t.tv_sec * 90000 + (uint64_t)t.tv_nsec * 9 / 100000;
+}
+
 typedef struct {
   uint64_t handle;
   intptr_t read_fn, stop_fn, close_fn, alloc_fn, free_fn;
@@ -305,7 +314,12 @@ static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int secon
               live_server_started = 1;
               live_profile_ready = 1;
               if (audio.publish) pbs_audio_configure("pcm_f32le", 2, 48000);
-              notify("PBS: live H.264 ready - open the console IP in a browser");
+              notify("PBS - Made By Seregonwar\n"
+                     "Thanks to: stonedmodder, zer0day, nexgen999, NSTG, and ONE Jailbreak for testing");
+              char ready_message[160];
+              snprintf(ready_message, sizeof ready_message,
+                       "PBS started successfully\nStreaming and web dashboard ready on port %d", port);
+              notify(ready_message);
             }
           }
         } else fprintf(f, "unexpected SPS/PPS metadata layout\n");
@@ -315,6 +329,7 @@ static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int secon
     uint64_t last_video_ms = capture_clock_ms();
     int reports = 0;
     measurement_start = capture_clock_ms();
+    const uint64_t video_clock_start = capture_clock_90k();
     while ((serving ? pbs_h264_server_running() && (!stress_live || capture_clock_ms() < until)
                     : capture_clock_ms() < until) && !ctx->asserted) {
       if (serving && pbs_h264_take_restart_request()) { recover = 1; fprintf(f, "capture restart requested\n"); break; }
@@ -342,7 +357,8 @@ static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int secon
           break;
         }
         if (serving) {
-          if (pbs_h264_publish(frame, bytes, (uint32_t)(frames * 1500))) {
+          uint32_t pts = (uint32_t)(capture_clock_90k() - video_clock_start);
+          if (pbs_h264_publish(frame, bytes, pts)) {
             fprintf(f, "frame publish failed\n");
             break;
           }
@@ -392,7 +408,7 @@ capture_free:
 int main(int argc, char **argv) {
   const char *mode = argc > 1 ? argv[1] : "avserve";
   if (strcmp(mode, "avserve")) { notify("PBS: use avserve [720p|1080p|1440p|2160p] [bitrate=N] [minqp=N] [norate] [offsetdump] [dependencydump] [moduledump] [noaudio] [port]"); return 1; }
-  char *serve_args[] = {argv[0], "avopenfast", "SceRemotePlay", "grant", "11", "2", "0", "8080", "2560", "1440", "1"};
+  char *serve_args[] = {argv[0], "avopenfast", "SceRemotePlay", "grant", "11", "2", "0", "9999", "2560", "1440", "1"};
 #if defined(PBS_PS5_DEFAULT_1080P)
   serve_args[4] = "12"; serve_args[8] = "1920"; serve_args[9] = "1080";
 #elif defined(PBS_PS5_DEFAULT_720P)
@@ -495,7 +511,8 @@ int main(int argc, char **argv) {
   if (!strcmp(mode, "avopen1") || !strcmp(mode, "avopenfast")) {
     /* Open the capture session; recovery retries only caller-owned resources. */
     if (argc < 3) return 1;
-    const pbs_ps5_offset_profile *layout = pbs_ps5_find_offsets(kernel_get_fw_version());
+    const uint32_t capture_firmware = kernel_get_fw_version();
+    const pbs_ps5_offset_profile *layout = pbs_ps5_find_offsets(capture_firmware);
     if (!layout) {
       notify("PBS: firmware capture layout unavailable; use dump payload");
       return 1;
@@ -622,8 +639,10 @@ avopen_retry:;
         params[rp->mask_mode_offset + 0x1c] = 1;
         param_u32(params, rp->mask_mode_offset + 0x20, 0x6e);
       }
-      fprintf(f, "Params size=0x%x feature=%u usage=%u %dx%d fps-mode=%u fw=0x%08x\n",
-              avcap->request_size, feature, usage, width, height, fps_mode, layout->firmware);
+      fprintf(f, "Params size=0x%x feature=%u usage=%u %dx%d fps-mode=%u fw=0x%08x profile=0x%08x selection=%s\n",
+              avcap->request_size, feature, usage, width, height, fps_mode,
+              capture_firmware, layout->firmware,
+              capture_firmware == layout->firmware ? "exact" : "family-range");
     }
     intptr_t fn_init = pbs_resolve_in(ctx.pid, "libSceAvcap2.sprx", "sceAvcap2Initialize");
     intptr_t fn_open = pbs_resolve_in(ctx.pid, "libSceAvcap2.sprx", "sceAvcap2OpenVideo");
@@ -744,7 +763,7 @@ avopen_retry:;
           (int32_t)(uint32_t)rc >= 0 && h) {
         owned_session_closed = 0;
         if (diagnostic_open_only) fprintf(f, "diagnostic open-only: closing handle without starting stream\n");
-        else if (argc > 6) capture_stream(f, &ctx, h, atoi(argv[6]), argc > 7 ? atoi(argv[7]) : 8080, width, height, audio_mode);
+        else if (argc > 6) capture_stream(f, &ctx, h, atoi(argv[6]), argc > 7 ? atoi(argv[7]) : 9999, width, height, audio_mode);
         intptr_t close_fn = pbs_resolve_in(ctx.pid, "libSceAvcap2.sprx", "sceAvcap2Close");
         if (close_fn && !ctx.asserted) {
           long close_rc = call(&ctx, close_fn, (uint64_t[6]){h, 0, 0, 0, 0, 0});
@@ -763,7 +782,7 @@ avopen_cleanup:;
     clear_ok = clear_ok && owned_session_closed;
     /* Retrying the smaller caller-owned profile is safe only after cleanup. */
     int fallback_1080 = live_request && automatic_resolution && clear_ok && !ctx.asserted &&
-        pbs_ps5_should_fallback_1080(layout->firmware, open_result,
+        pbs_ps5_should_fallback_1080(capture_firmware, open_result,
                                      detected_video_mode, width, height);
     if (fallback_1080)
       fprintf(f, "OpenVideo rejected 1440p (0x%08x, video mode 0x%x); retrying 1080p with feature 12\n",

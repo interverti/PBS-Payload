@@ -22,7 +22,7 @@ def read_exact(stream, size):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--host', default='192.168.1.25')
-    ap.add_argument('--port', type=int, default=8080)
+    ap.add_argument('--port', type=int, default=9999)
     ap.add_argument('--seconds', type=float, default=4)
     ap.add_argument('--output', type=Path, default=Path('build/capture.h264'))
     args = ap.parse_args()

@@ -32,9 +32,11 @@ typedef struct {
 } pbs_ps5_remoteplay_offsets;
 
 typedef struct pbs_ps5_offset_profile {
+  /* Reference dump ID; a family fallback may run on another firmware. */
   uint32_t firmware;
   pbs_ps5_avcap2_offsets avcap2;
   pbs_ps5_remoteplay_offsets remoteplay;
 } pbs_ps5_offset_profile;
 
+/* Prefer exact IDs, then the explicitly configured inclusive release ranges. */
 const pbs_ps5_offset_profile *pbs_ps5_find_offsets(uint32_t firmware);

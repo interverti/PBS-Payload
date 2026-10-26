@@ -248,7 +248,7 @@ int main(int argc, char **argv) {
   fprintf(log, "PBS PS4 startup argc=%d argv=%p\n", argc, (void *)argv);
   int height = PBS_PS4_CAPTURE_HEIGHT;
   int width = height == 1080 ? 1920 : 1280;
-  int port = 8080, status = 1, initialized = 0, started = 0;
+  int port = 9999, status = 1, initialized = 0, started = 0;
   unsigned seconds = 0;
 #ifdef PBS_PS4_CAPTURE_SECONDS
   seconds = PBS_PS4_CAPTURE_SECONDS;

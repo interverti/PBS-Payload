@@ -8,6 +8,7 @@ Requires capstone (`python -m pip install capstone`). 7z/RAR input also requires
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -28,6 +29,33 @@ ERROR = (0x81950001).to_bytes(4, "little")
 MAX_INPUT_FILES = 64
 MAX_INPUT_BYTES = 64 * 1024 * 1024
 MEMORY_LIMITS = {MODULE: 4 * 1024 * 1024, EBOOT: 8 * 1024 * 1024}
+
+# Inclusive release bounds from the 2026-10-26 dump audit. Intermediate
+# releases reuse the observed request geometry; this is not hardware proof.
+# The low 16 bits are build revisions and do not select a different geometry.
+FIRMWARE_RANGES = (
+    (0x06020000, 0x08400000, 0x06020004),
+    (0x09200000, 0x09400000, 0x09200005),
+    (0x10010000, 0x10600000, 0x10010000),
+    (0x11400000, 0x12700000, 0x11600005),
+    # 13.40 Avcap2 executable LOADs match 13.60; native constructor missing.
+    (0x13400000, 0x13600000, 0x13600007),
+)
+
+
+def catalog_release_keys():
+    """Public patch names are not kernel build IDs: compare major/minor only."""
+    catalog = json.loads(Path(__file__).with_name("ps5_firmware_releases.json").read_text(encoding="utf-8"))
+    names = catalog["releases"]
+    if len(names) != len(set(names)):
+        raise ValueError("duplicate public firmware release")
+    keys = set()
+    for name in names:
+        if not re.fullmatch(r"\d{2}\.\d{2}\.\d{2}", name, flags=re.ASCII):
+            raise ValueError(f"invalid public firmware release: {name}")
+        major, minor, _ = name.split(".")
+        keys.add(int(major + minor, 16) << 16)
+    return sorted(keys)
 
 
 def memory_limit(name: str) -> int | None:
@@ -643,16 +671,22 @@ def main() -> int:
             registry += ["#ifdef PBS_PS5_EXPERIMENTAL_FW400", case, "#endif"]
         else:
             registry.append(case)
-    if 0x13600007 in known:
-        registry += ["    default:",
-                     "      /* 13.40 and 13.60 have identical executable Avcap2 segments. The",
-                     "       * 13.40 SceRemotePlay constructor is not available for comparison. */",
-                     "      if ((firmware & 0xffff0000u) == 0x13400000u)",
-                     "        return &pbs_ps5_offsets_1360;",
-                     "      return 0;"]
-    else:
-        registry += ["    default: return 0;"]
-    registry += ["  }", "}", ""]
+    registry += ["    default: break;", "  }", "",
+                 "  /* Exact profiles take precedence. Reuse geometry only inside the",
+                 "   * audited family bounds, including other builds of each release. */"]
+    active_ranges = [r for r in FIRMWARE_RANGES if r[2] in known]
+    if active_ranges:
+        registry += ["  const uint32_t version = firmware & 0xffff0000u;",
+                     "  /* Only catalogued public releases may use a family fallback. */",
+                     "  switch (version) {"]
+        for release in catalog_release_keys():
+            if any(lower <= release <= upper for lower, upper, _ in active_ranges):
+                registry += [f"    case 0x{release:08x}u:"]
+        registry += ["      break;", "    default: return 0;", "  }"]
+    for lower, upper, reference in active_ranges:
+        registry += [f"  if (version >= 0x{lower:08x}u && version <= 0x{upper:08x}u)",
+                     f"    return &pbs_ps5_offsets_{fw_name(reference)};"]
+    registry += ["  return 0;", "}", ""]
     registry_path = args.out / "registry.c"
     registry_text = "\n".join(registry)
     if not registry_path.exists() or registry_path.read_text(encoding="utf-8") != registry_text:

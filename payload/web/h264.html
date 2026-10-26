@@ -127,6 +127,7 @@ async function play(){
  let presentedTime=video.currentTime,playbackBlocked=false;
  let sequence=1,queue=[],pending=new Uint8Array(),attemptingPlay=false;
  let previousPts=null,timeline=0,frameCallback=null,lastTrim=0;
+ let pendingSample=null;
  let appendedKeys=[],lastKeyframe=Date.now(),lastKeyRequest=0,keyframeBusy=false;
  const fail=error=>{
   if(signal.aborted)return;
@@ -260,17 +261,22 @@ async function play(){
     if(!size||size>2097152)throw new Error('Invalid video frame size');
     if(pending.length-offset<8+size)break;
     const sample=H264Mux.accessUnit(pending.subarray(offset+8,offset+8+size));
-    sample.duration=Math.round(90000/(config.fps||60));
     // Each browser session starts at zero. Unwrap the 32-bit wire clock so
     // a long-running payload cannot jump backwards after ~13 hours.
     if(previousPts!==null){
      const delta=(pts-previousPts)>>>0;
-     if(delta>0x7fffffff)throw new Error('Video timestamp moved backwards');
+     if(!delta||delta>0x7fffffff)throw new Error('Video timestamp did not advance');
+     // Hold one sample until its successor provides its real duration.
+     // Fixed 1/60-second durations starve playback when capture runs slower,
+     // or leave holes when the transport drops frames before an IDR.
+     pendingSample.sample.duration=delta;
+     queue.push({data:H264Mux.fragment(sequence++,pendingSample.time,[pendingSample.sample]),
+      keyTime:pendingSample.sample.key?pendingSample.time/90000:null});
      timeline+=delta;
     }
     previousPts=pts;
     if(sample.key)lastKeyframe=Date.now();
-    queue.push({data:H264Mux.fragment(sequence++,timeline,[sample]),keyTime:sample.key?timeline/90000:null});
+    pendingSample={sample,time:timeline};
     lastFrame=Date.now();
     offset+=8+size;
     drain();

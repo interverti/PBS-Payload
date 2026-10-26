@@ -6,7 +6,7 @@ const html=fs.readFileSync(require('node:path').join(__dirname,'../../payload/we
 const scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
 assert.equal(scripts.length,3);
 let now=1000,frameConnections=0,opened=0,closed=0,lastSource=null;
-let deliverFrame=null,removed=[],fragmentTimes=[],cancelledCallbacks=0,keyRequests=0;
+let deliverFrame=null,removed=[],fragmentTimes=[],fragmentDurations=[],cancelledCallbacks=0,keyRequests=0;
 const timers=new Map();
 let nextTimer=1,currentMedia=null;
 class Events{
@@ -80,7 +80,7 @@ function jsonResponse(value){return {ok:true,json:async()=>value,text:async()=>J
 const sandbox={window,document,MediaSource:FakeMedia,URL:url,fetch:fetchMock,
  Uint8Array,DataView,AbortController,Option:function(){},Math,console,
  Date:{now:()=>now},H264Mux:{init:()=>new Uint8Array([1]),fragment:(seq,pts,samples)=>{
-  fragmentTimes.push(pts);const data=new Uint8Array(10);new DataView(data.buffer).setFloat64(0,pts/90000);data[8]=samples[0].key?1:0;return data;
+  fragmentTimes.push(pts);fragmentDurations.push(samples[0].duration);const data=new Uint8Array(10);new DataView(data.buffer).setFloat64(0,pts/90000);data[8]=samples[0].key?1:0;return data;
  },accessUnit:data=>({data:new Uint8Array([3]),key:(data[0]&31)===5})},
  setInterval(fn){const id=nextTimer++;timers.set(id,fn);return id;},
  clearInterval(id){timers.delete(id);},
@@ -103,7 +103,8 @@ async function settle(){for(let i=0;i<12;i++)await new Promise(r=>setImmediate(r
  for(let i=0;i<3;i++){view.setUint32(i*9,1);view.setUint32(i*9+4,(0xfffffa24+i*1500)>>>0);packet[i*9+8]=i===0?0x65:0x41;}
  deliverFrame({value:packet,done:false});
  await settle();
- assert.deepEqual(fragmentTimes,[0,1500,3000],'wire clock must rebase and unwrap across uint32 rollover');
+ assert.deepEqual(fragmentTimes,[0,1500],'wire clock must rebase and unwrap across uint32 rollover');
+ assert.deepEqual(fragmentDurations,[1500,1500],'successor timestamps must determine sample duration');
  assert.deepEqual(removed,[],'a long GOP with only its initial IDR must never be trimmed through the playhead');
  const safePacket=new Uint8Array(27),safeView=new DataView(safePacket.buffer);
  for(let i=0;i<3;i++){safeView.setUint32(i*9,1);safeView.setUint32(i*9+4,(0xfffffa24+13500000+i*1500)>>>0);safePacket[i*9+8]=i===0?0x65:0x41;}
@@ -112,6 +113,19 @@ async function settle(){for(let i=0;i<12;i++)await new Promise(r=>setImmediate(r
  assert.equal(lastSource.removedPlayhead,false,'MSE dependency removal must preserve the current picture');
  assert.equal(video.currentTime,170,'150 ms network jitter must not trigger a seek');
  assert.equal(video.playbackRate,1,'normal playback cushion should use normal speed');
+ // A 50fps capture still advertises a requested 60fps mode. Its 50 samples
+ // must span one real second, not 50/60 seconds followed by a buffering pause.
+ const slowPacket=new Uint8Array(51*9),slowView=new DataView(slowPacket.buffer);
+ for(let i=0;i<51;i++){
+  slowView.setUint32(i*9,1);
+  slowView.setUint32(i*9+4,(0xfffffa24+13500000+4800+i*1800)>>>0);
+  slowPacket[i*9+8]=0x41;
+ }
+ deliverFrame({value:slowPacket,done:false});await settle();
+ assert.equal(fragmentDurations.slice(-50).reduce((sum,d)=>sum+d,0),90000,
+  '50fps samples must cover a full second regardless of nominal 60fps config');
+ for(let i=1;i<fragmentTimes.length;i++)assert.equal(fragmentTimes[i],fragmentTimes[i-1]+fragmentDurations[i-1],
+  'variable durations and IDR transport gaps must leave no holes in the MP4 timeline');
  now+=3000;for(const fn of [...timers.values()])fn();await settle();
  assert.ok(keyRequests>0,'viewer must request periodic IDRs when the encoder emits none');
  now+=10000;

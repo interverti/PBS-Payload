@@ -15,6 +15,22 @@ import generate_ps5_offsets as offsets
 
 
 class GenerateOffsetsTests(unittest.TestCase):
+    def test_public_release_catalog_keeps_patch_names_separate_from_kernel_ids(self):
+        import json
+        catalog = json.loads((TOOLS / "ps5_firmware_releases.json").read_text(encoding="utf-8"))
+        names = catalog["releases"]
+        self.assertIn("08.20.00", names)
+        self.assertIn("08.20.02", names)
+        self.assertIn("12.20.00", names)
+        self.assertIn("13.42.00", names)
+        self.assertIn("14.10.00", names)
+        self.assertFalse(any("sys_ex" in n for n in names))
+        keys = offsets.catalog_release_keys()
+        self.assertEqual(keys.count(0x08200000), 1)
+        self.assertIn(0x13420000, keys)
+        for invented in (0x09300000, 0x11500000, 0x12100000, 0x13500000):
+            self.assertNotIn(invented, keys)
+
     def test_zip_and_tar_select_memory_prefixes_only(self):
         members = {
             "dumps/ps5-06020004-test/libSceAvcap2.sprx.prefix.bin": b"AVCAP",
@@ -65,6 +81,10 @@ class GenerateOffsetsTests(unittest.TestCase):
                 registry = (out / "registry.c").read_text(encoding="utf-8")
                 self.assertIn("case 0x09200005u: return &pbs_ps5_offsets_920;", registry)
                 self.assertEqual(registry.count("case 0x09200005u"), 1)
+                self.assertIn("version >= 0x09200000u && version <= 0x09400000u", registry)
+                self.assertNotIn("version >= 0x10010000u", registry)
+                self.assertIn("case 0x09400000u:", registry)
+                self.assertNotIn("case 0x09300000u:", registry)
 
     def test_duplicate_archive_members_are_rejected(self):
         import warnings
