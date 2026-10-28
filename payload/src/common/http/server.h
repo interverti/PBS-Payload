@@ -11,6 +11,7 @@ int pbs_h264_publish(const void *data, size_t length, uint32_t pts);
 int pbs_audio_publish(const void *data, size_t length, uint32_t pts);
 void pbs_audio_configure(const char *codec, int channels, int rate);
 int pbs_h264_server_running(void);
+/* Capture thread: consume client requests and periodic encoder refreshes. */
 int pbs_h264_take_keyframe_request(void);
 void pbs_h264_server_stop(void);
 /* Call from the capture thread after stop, before the payload can unload. */

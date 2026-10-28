@@ -34,6 +34,7 @@ static void ps4_http_trace(const char *text) {
 
 #define SLOTS 64
 #define FRAME_MAX 0x200000u
+#define KEYFRAME_INTERVAL_MS 2000u
 #define AUDIO_SLOTS 256
 #define AUDIO_MAX 0x10000u
 #ifndef PBS_RECORD_DIR
@@ -49,6 +50,7 @@ static struct {
   unsigned char sps[128], pps[128];
   size_t sps_len, pps_len;
   uint64_t seq, bytes, started;
+  uint64_t last_keyframe_ms, last_key_request_ms;
   int running, listener, clients, key_request, rec_pending, width, height, fps;
   int media_clients;
   int restart_request;
@@ -181,6 +183,7 @@ int pbs_h264_publish(const void *data, size_t length, uint32_t pts) {
   memcpy(buffer, data, length);
   frame->len = length; frame->pts = pts; frame->seq = seq;
   frame->key = keyframe(data, length);
+  if (frame->key) live.last_keyframe_ms = milliseconds();
   live.seq = seq; live.bytes += length;
   if (live.rec_pending && frame->key && !live.rec) {
     char path[192];
@@ -249,7 +252,21 @@ int pbs_h264_server_running(void) {
   pthread_mutex_lock(&live.lock); int result = live.running; pthread_mutex_unlock(&live.lock); return result;
 }
 int pbs_h264_take_keyframe_request(void) {
-  pthread_mutex_lock(&live.lock); int result = live.key_request; live.key_request = 0; pthread_mutex_unlock(&live.lock); return result;
+  pthread_mutex_lock(&live.lock);
+  uint64_t now = milliseconds();
+  /* Refresh the encoder even for clients that never POST /video/keyframe
+   * (including native players and recording-only sessions). Static scenes
+   * must not depend on motion or a browser watchdog to end a long GOP.
+   * Track received IDRs, not requests: a refused request is retried, while
+   * natural encoder IDRs postpone the next periodic request. */
+  int periodic = live.running &&
+      now - live.last_keyframe_ms >= KEYFRAME_INTERVAL_MS &&
+      now - live.last_key_request_ms >= KEYFRAME_INTERVAL_MS;
+  int result = live.key_request || periodic;
+  live.key_request = 0;
+  if (result) live.last_key_request_ms = now;
+  pthread_mutex_unlock(&live.lock);
+  return result;
 }
 void pbs_h264_server_stop(void) {
   pthread_mutex_lock(&live.lock);
@@ -609,6 +626,7 @@ int pbs_h264_server_start_at_rate(int port, int width, int height, int fps,
     for (int i = 0; i < AUDIO_SLOTS; ++i) { live.audio[i].seq = 0; live.audio[i].len = 0; }
     live.seq = live.bytes = live.audio_seq = live.audio_bytes = live.audio_chunks = 0;
     live.started = milliseconds(); live.audio_started = 0; live.audio_generation++;
+    live.last_keyframe_ms = live.last_key_request_ms = live.started;
     live.width = width; live.height = height; live.fps = fps;
     if (live.profile_changing && live.profile_height == height) live.profile_changing = 0;
     memcpy(live.sps, sps, sps_len); live.sps_len = sps_len;
@@ -627,6 +645,8 @@ int pbs_h264_server_start_at_rate(int port, int width, int height, int fps,
   struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = htonl(INADDR_ANY)};
   if (bind(fd, (struct sockaddr *)&addr, sizeof addr) || listen(fd, 8)) { close(fd); return -1; }
   live.listener = fd; live.running = 1; live.started = milliseconds();
+  live.last_keyframe_ms = live.last_key_request_ms = live.started;
+  live.key_request = 1;
   live.width = width; live.height = height; live.fps = fps;
   memcpy(live.sps, sps, sps_len); live.sps_len = sps_len;
   memcpy(live.pps, pps, pps_len); live.pps_len = pps_len;
