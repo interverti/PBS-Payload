@@ -526,11 +526,14 @@ capture_open:
     goto capture_retry;
   }
   if (pbs_h264_server_start_at_rate(port, width, height, PBS_PS4_CAPTURE_FPS, sps, sps_len, pps, pps_len)) {
-    fprintf(log, "HTTP server failed on port %d errno=%d\n", port, errno);
+    fprintf(log, "HTTP server failed on ports %d-%d errno=%d\n",
+            port, port + PBS_H264_PORT_SCAN - 1, errno);
     pbs_problem_record(log, PBS_PROBLEM_FATAL, "http", 0, errno,
-                       "HTTP server failed on port %d", port);
+                       "HTTP server failed on ports %d-%d", port, port + PBS_H264_PORT_SCAN - 1);
     goto capture_retry;
   }
+  if (pbs_h264_server_port() != port)
+    fprintf(log, "Port %d busy, serving on %d\n", port, pbs_h264_server_port());
   /* A second client may POST /capture/restart while Open/GetInfo/Start is
    * already servicing the first request. The new encoder generation fulfills
    * both requests; carrying the stale flag into the fresh Read loop would

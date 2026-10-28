@@ -62,6 +62,9 @@ static int stress_live;
 static int live_request;
 static unsigned live_start_attempts;
 static int live_server_started;
+/* Set when the listener could not be created at all, so the closing
+ * notification reports the port conflict instead of a capture failure. */
+static char stream_failure[96];
 static int live_profile_ready;
 static int bitrate_after_start;
 
@@ -309,17 +312,29 @@ static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int secon
                   (unsigned long long)sps_len, (unsigned long long)pps_len);
           if (serving) {
             int server_rc = pbs_h264_server_start(port, width, height, metadata + 0x18, sps_len, metadata + 0xa0, pps_len);
+            int bound_port = server_rc ? 0 : pbs_h264_server_port();
             fprintf(f, "H.264 HTTP :%d -> %d\n", port, server_rc);
             if (!server_rc) {
               live_server_started = 1;
               live_profile_ready = 1;
+              stream_failure[0] = 0;
+              if (bound_port && bound_port != port)
+                fprintf(f, "port %d busy, serving on %d\n", port, bound_port);
               if (audio.publish) pbs_audio_configure("pcm_f32le", 2, 48000);
               notify("PBS - Made By Seregonwar\n"
                      "Thanks to: stonedmodder, zer0day, nexgen999, NSTG, and ONE Jailbreak for testing");
               char ready_message[160];
-              snprintf(ready_message, sizeof ready_message,
-                       "PBS started successfully\nStreaming and web dashboard ready on port %d", port);
+              if (bound_port && bound_port != port)
+                snprintf(ready_message, sizeof ready_message,
+                         "PBS started successfully\nPort %d was busy: streaming and web dashboard on port %d",
+                         port, bound_port);
+              else
+                snprintf(ready_message, sizeof ready_message,
+                         "PBS started successfully\nStreaming and web dashboard ready on port %d", bound_port);
               notify(ready_message);
+            } else {
+              snprintf(stream_failure, sizeof stream_failure,
+                       "PBS: no free port %d-%d", port, port + PBS_H264_PORT_SCAN - 1);
             }
           }
         } else fprintf(f, "unexpected SPS/PPS metadata layout\n");
@@ -819,7 +834,8 @@ avopen_cleanup:;
       if (pbs_h264_server_running() || retry_start) goto avopen_retry;
     }
     if (live_request) { pbs_h264_server_stop(); pbs_h264_server_wait(); }
-    notify(live_server_started ? "PBS: streaming stopped" : failure_note);
+    notify(live_server_started ? "PBS: streaming stopped"
+                               : (stream_failure[0] ? stream_failure : failure_note));
     return live_server_started ? 0 : 1;
   }
 

@@ -71,6 +71,7 @@ python3 payload/embed_assets.py
 "$out/rtp-packetizer"
 run http-shutdown -pthread tests/http/shutdown.c payload/src/common/http/server.c
 run http-frame-rate -pthread tests/http/frame_rate.c payload/src/common/http/server.c
+run http-port-scan -pthread tests/http/port_scan.c payload/src/common/http/server.c
 run http-keyframe-refresh -pthread -Wl,--wrap=clock_gettime tests/http/keyframe_refresh.c payload/src/common/http/server.c
 run http-stream-jitter -pthread -Wl,--wrap=send -Wl,--wrap=sendto tests/http/stream_jitter.c payload/src/common/http/server.c
 "$out/http-stream-jitter" --rtp

@@ -3,10 +3,20 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* The listener binds the requested port or, when another process already owns
+ * it (typically a previous payload instance), the next free port inside this
+ * window. Callers advertise pbs_h264_server_port(), not the request. */
+#define PBS_H264_PORT_SCAN 10
+/* RTP only: a sender that falls this far behind live treats the backlog as
+ * stale, jumps to the newest frame and asks capture for a fresh IDR instead of
+ * replaying lag. A shorter stall keeps the queued frames. */
+#define PBS_H264_RTP_MAX_BACKLOG 6
 int pbs_h264_server_start(int port, int width, int height, const unsigned char *sps, size_t sps_len,
                            const unsigned char *pps, size_t pps_len);
 int pbs_h264_server_start_at_rate(int port, int width, int height, int fps,
     const unsigned char *sps, size_t sps_len, const unsigned char *pps, size_t pps_len);
+/* Port actually bound by the running listener, 0 when it is not running. */
+int pbs_h264_server_port(void);
 int pbs_h264_publish(const void *data, size_t length, uint32_t pts);
 int pbs_audio_publish(const void *data, size_t length, uint32_t pts);
 void pbs_audio_configure(const char *codec, int channels, int rate);

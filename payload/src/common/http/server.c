@@ -51,7 +51,7 @@ static struct {
   size_t sps_len, pps_len;
   uint64_t seq, bytes, started;
   uint64_t last_keyframe_ms, last_key_request_ms;
-  int running, listener, clients, key_request, rec_pending, width, height, fps;
+  int running, listener, port, clients, key_request, rec_pending, width, height, fps;
   int media_clients;
   int restart_request;
   int profiles_enabled, profile_pending, profile_changing, profile_height, profile_error;
@@ -251,6 +251,12 @@ int pbs_audio_publish(const void *data, size_t length, uint32_t pts) {
 int pbs_h264_server_running(void) {
   pthread_mutex_lock(&live.lock); int result = live.running; pthread_mutex_unlock(&live.lock); return result;
 }
+int pbs_h264_server_port(void) {
+  pthread_mutex_lock(&live.lock);
+  int result = live.running ? live.port : 0;
+  pthread_mutex_unlock(&live.lock);
+  return result;
+}
 int pbs_h264_take_keyframe_request(void) {
   pthread_mutex_lock(&live.lock);
   uint64_t now = milliseconds();
@@ -271,6 +277,7 @@ int pbs_h264_take_keyframe_request(void) {
 void pbs_h264_server_stop(void) {
   pthread_mutex_lock(&live.lock);
   live.running = 0;
+  live.port = 0;
   live.rec_pending = 0;
   live.rec_headers_pending = 0;
   if (live.rec) { fclose(live.rec); live.rec = NULL; }
@@ -387,7 +394,7 @@ static void rtp_stream(int fd, int port) {
     int alive=1;
     while(alive && live.running && next>live.seq) alive=wait_media(fd,generation,0);
     if(!alive || !live.running || generation!=live.generation)break;
-    if(live.seq-next>=6){next=live.seq;synced=0;live.key_request=1;}
+    if(live.seq-next>=PBS_H264_RTP_MAX_BACKLOG){next=live.seq;synced=0;live.key_request=1;}
     frame_t *frame=&live.frames[next++%SLOTS];
     if(frame->seq!=next-1 || (!synced && !frame->key))continue;
     size_t prefix = synced ? 0 : 8 + live.sps_len + live.pps_len;
@@ -643,12 +650,24 @@ int pbs_h264_server_start_at_rate(int port, int width, int height, int fps,
   }
   pthread_mutex_unlock(&live.lock);
   signal(SIGPIPE, SIG_IGN);
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) return -1;
-  int yes = 1; setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
-  struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = htonl(INADDR_ANY)};
-  if (bind(fd, (struct sockaddr *)&addr, sizeof addr) || listen(fd, 8)) { close(fd); return -1; }
-  live.listener = fd; live.running = 1; live.started = milliseconds();
+  /* A port owned by another instance must not abort the session: walk the
+   * scan window and keep the first port that binds. SO_REUSEADDR covers
+   * TIME_WAIT, not an active listener, so a real conflict still fails. */
+  int fd = -1, bound_port = 0, last_error = 0;
+  for (int candidate = port; candidate < port + PBS_H264_PORT_SCAN && candidate <= 65535; ++candidate) {
+    int probe = socket(AF_INET, SOCK_STREAM, 0);
+    if (probe < 0) { last_error = errno; break; }
+    int yes = 1; setsockopt(probe, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
+    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons(candidate),
+                               .sin_addr.s_addr = htonl(INADDR_ANY)};
+    if (!bind(probe, (struct sockaddr *)&addr, sizeof addr) && !listen(probe, 8)) {
+      fd = probe; bound_port = candidate; break;
+    }
+    last_error = errno;
+    close(probe);
+  }
+  if (fd < 0) { errno = last_error; return -1; }
+  live.listener = fd; live.port = bound_port; live.running = 1; live.started = milliseconds();
   live.last_keyframe_ms = live.last_key_request_ms = live.started;
   live.key_request = 1;
   live.width = width; live.height = height; live.fps = fps;
