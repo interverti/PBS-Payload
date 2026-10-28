@@ -2,6 +2,7 @@
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
+const managedOnly=process.argv.includes('--managed');
 const html=fs.readFileSync(require('node:path').join(__dirname,'../../payload/web/h264.html'),'utf8');
 const scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
 assert.equal(scripts.length,3);
@@ -30,6 +31,7 @@ class FakeSource extends Events{
  }
 }
 class FakeMedia extends Events{
+ constructor(){super();if(managedOnly)assert.equal(node('video').disableRemotePlayback,true,'Safari requires remote playback disabled before attaching MMS');}
  static isTypeSupported(){return true;}
  addSourceBuffer(){lastSource=new FakeSource();return lastSource;}
 }
@@ -52,7 +54,8 @@ function node(id){
 }
 const document=Object.assign(new Events(),{hidden:false,activeElement:null,createElement(){return node('created');},getElementById:node});
 const window=new Events();
-window.MediaSource=FakeMedia;
+window.MediaSource=managedOnly?undefined:FakeMedia;
+window.ManagedMediaSource=managedOnly?FakeMedia:undefined;
 const url={createObjectURL(media){currentMedia=media;opened++;return 'blob:test-'+opened;},revokeObjectURL(){closed++;}};
 function fetchMock(path,options={}){
  if(path==='/video/keyframe'){keyRequests++;return Promise.resolve(jsonResponse({}));}
@@ -112,7 +115,13 @@ async function settle(){for(let i=0;i<12;i++)await new Promise(r=>setImmediate(r
  assert.deepEqual(removed,[[0,149.999]],'trim only before an appended IDR, also with queued fragments');
  assert.equal(lastSource.removedPlayhead,false,'MSE dependency removal must preserve the current picture');
  assert.equal(video.currentTime,170,'150 ms network jitter must not trigger a seek');
- assert.equal(video.playbackRate,1,'normal playback cushion should use normal speed');
+ assert.equal(video.playbackRate,1.05,'150 ms backlog should recover gradually without seeking');
+ video.buffered={length:1,start:()=>0,end:()=>170.09};
+ lastSource.emit('updateend');await settle();
+ assert.equal(video.playbackRate,1,'90 ms buffer should use normal speed');
+ video.buffered={length:1,start:()=>0,end:()=>170.4};
+ lastSource.emit('updateend');await settle();
+ assert.ok(Math.abs(video.currentTime-170.32)<0.00001,'400 ms backlog should catch up to an 80 ms cushion');
  // A 50fps capture still advertises a requested 60fps mode. Its 50 samples
  // must span one real second, not 50/60 seconds followed by a buffering pause.
  const slowPacket=new Uint8Array(51*9),slowView=new DataView(slowPacket.buffer);

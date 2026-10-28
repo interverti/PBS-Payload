@@ -72,9 +72,13 @@ python3 payload/embed_assets.py
 run http-shutdown -pthread tests/http/shutdown.c payload/src/common/http/server.c
 run http-frame-rate -pthread tests/http/frame_rate.c payload/src/common/http/server.c
 run http-keyframe-refresh -pthread -Wl,--wrap=clock_gettime tests/http/keyframe_refresh.c payload/src/common/http/server.c
+run http-stream-jitter -pthread -Wl,--wrap=send -Wl,--wrap=sendto tests/http/stream_jitter.c payload/src/common/http/server.c
+"$out/http-stream-jitter" --rtp
 run http-profiles -pthread tests/http/profiles.c payload/src/common/http/server.c
 if command -v node >/dev/null 2>&1; then
   node tests/media/h264_mux_rate.js
+  node tests/ps5/test_dashboard_recovery.js
+  node tests/ps5/test_dashboard_recovery.js --managed
 else
   printf 'SKIP browser frame-rate regression: Node.js unavailable.\n'
 fi

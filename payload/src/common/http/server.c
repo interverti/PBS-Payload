@@ -307,7 +307,11 @@ static void stream(int fd) {
     int alive = 1;
     while (alive && live.running && next > live.seq) alive = wait_media(fd, generation, 0);
     if (!alive || !live.running || generation != live.generation) { HTTP_TRACE("stream reader no longer alive\n"); break; }
-    if (live.seq - next >= 6) { next = live.seq; synced = 0; live.key_request = 1; }
+    /* A short socket stall does not invalidate frames still in the ring.
+     * Dropping at six frames (100 ms at 60 fps) needlessly broke reference
+     * chains and triggered repeated expensive IDRs during menu movement.
+     * Resynchronize only once the producer actually overwrites unread data. */
+    if (live.seq - next >= SLOTS) { next = live.seq; synced = 0; live.key_request = 1; }
     frame_t *f = &live.frames[next % SLOTS];
     next++;
     if (f->seq != next - 1 || (!synced && !f->key)) continue;
@@ -383,7 +387,7 @@ static void rtp_stream(int fd, int port) {
     int alive=1;
     while(alive && live.running && next>live.seq) alive=wait_media(fd,generation,0);
     if(!alive || !live.running || generation!=live.generation)break;
-    if(live.seq-next>=6){next=live.seq;synced=0;live.key_request=1;}
+    if(live.seq-next>=SLOTS){next=live.seq;synced=0;live.key_request=1;}
     frame_t *frame=&live.frames[next++%SLOTS];
     if(frame->seq!=next-1 || (!synced && !frame->key))continue;
     size_t prefix = synced ? 0 : 8 + live.sps_len + live.pps_len;
