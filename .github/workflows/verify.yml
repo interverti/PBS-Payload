@@ -40,8 +40,20 @@ jobs:
           python3 -m unittest discover -s tests -p test_store_release.py
           python3 -m unittest discover -s tests -p test_install_sdk.py
           python3 -m unittest discover -s tests -p test_verify_ps5_elf.py
+          python3 -m unittest discover -s tests -p test_ps5_firmware_table.py
           python3 tools/store-release.py --help > /dev/null
           python3 tools/release-version.py check "$(python3 tools/release-version.py show)"
+
+      - name: PS5 selector matrix
+        run: |
+          mkdir -p build
+          for define in '' '-DPBS_PS5_EXPERIMENTAL_FW400'; do
+            # shellcheck disable=SC2086
+            cc -std=c11 -Wall -Wextra -Werror $define -Ipayload/src \
+              tests/ps5/offset_ranges.c payload/src/platform/ps5/offset/*.c \
+              -o build/offset_ranges
+            ./build/offset_ranges
+          done
 
   payload:
     name: ${{ matrix.platform }} payload build

@@ -6,7 +6,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 cc=${CC:-cc}
 out=build/ps4-tests
 mkdir -p "$out"
-flags=(-std=gnu11 -O2 -Wall -Wextra -Werror -Ipayload/src -Ipayload/build/generated -Itests/stubs)
+flags=(-std=gnu11 -O2 -Wall -Wextra -Werror -Ipayload/src -Ipayload/build/generated -Itests/stubs -Itools)
 run() {
   local name=$1
   shift
@@ -15,6 +15,7 @@ run() {
 }
 run firmware tests/ps4/system/firmware.c
 run problem-log tests/common/problem_log.c payload/src/common/diagnostics/problem_log.c
+run offset-report tests/ps4/dump/offset_report.c tools/dump/ps4/offset_report.c
 run layout tests/ps4/system/layout.c payload/src/platform/ps4/system/layout.c
 run layout-runtime -DPBS_PS4_DYNAMIC_LAYOUT=1 -DPBS_TEST_CONTROL -DKERNEL_IMAGE_SIZE=0x100000 tests/ps4/system/layout_runtime.c payload/src/platform/ps4/system/layout_runtime.c
 run export-reader tests/ps4/capture/export_reader.c payload/src/platform/ps4/capture/export_reader.c
@@ -82,5 +83,30 @@ record_dir=$(mktemp -d "$PWD/$out/recording.XXXXXX")
 python3 -m unittest discover -s tests -p test_verify_ps4_capture.py
 python3 -m unittest discover -s tests -p test_inspect_ps4_venc_journal.py
 python3 -m unittest discover -s tests -p test_diagnose_ps4_log.py
+python3 -m unittest discover -s tests -p test_ps4_firmware_table.py
+python3 -m unittest discover -s tests -p test_ps4_offsets.py
+python3 -m unittest discover -s tests -p test_ps5_firmware_table.py
 python3 -m unittest discover -s tests -p test_store_release.py
-printf 'PS4 offline regression passed. No console connection made.\n'
+# KERNEL_ADDRESS_IMAGE_BASE is a negative intptr_t on hardware: a "> 0" test
+# compiles and silently disables discovery. Only pbs_ps4_layout_available() may
+# decide whether the kernel image is readable.
+if grep -rnE 'KERNEL_ADDRESS_IMAGE_BASE[[:space:]]*[<>]' payload/src; then
+  printf 'KERNEL_ADDRESS_IMAGE_BASE compared with a signed relational operator.\n' >&2
+  printf 'Use pbs_ps4_layout_available(base, size) from system/layout.h.\n' >&2
+  exit 1
+fi
+# 13.20 has a measured profile: the temporary experimental gate must never come
+# back, in the payload, the build plumbing or CI.
+if grep -rn --exclude=test_ps4_host.sh 'PBS_PS5_EXPERIMENTAL_FW1320' payload .github tools; then
+  printf '13.20 is measured; remove the experimental gate and its build switch.\n' >&2
+  exit 1
+fi
+# The selector is the only place where a gated profile can leak into a build:
+# compile it in every configuration and run the selection checks.
+for define in '' '-DPBS_PS5_EXPERIMENTAL_FW400'; do
+  # shellcheck disable=SC2086
+  "$cc" "${flags[@]}" $define -Ipayload/src tests/ps5/offset_ranges.c \
+    payload/src/platform/ps5/offset/*.c -o "$out/ps5-offset-ranges"
+  "$out/ps5-offset-ranges"
+done
+printf 'Offline regression passed (PS4 payload + PS5 firmware ledger + selector matrix). No console connection made.\n'

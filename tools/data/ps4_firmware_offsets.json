@@ -1,0 +1,142 @@
+{
+  "schema": 1,
+  "platform": "ps4",
+  "note": "Per-firmware PS4 offsets. Values are RVAs relative to the module or kernel image base; null means not measured on that firmware, never zero. Kernel offsets, avcap internals and library exports are all firmware-specific: never reuse them across releases. Sources are listed per firmware and can be re-checked with tools/ps4_firmware_table.py --report.",
+  "firmwares": [
+    {
+      "release": "9.00",
+      "version": "0x09008031",
+      "version_mask": "0xffff0000",
+      "evidence": [
+        "PS4-DUMP v1 report (dump.txt / offsets.txt) on fw 0x09008031",
+        "pbs smoke log fw=09008031: Runtime layout acmgr=+8bc20 gates=+41f4e5,+41f9d1"
+      ],
+      "kernel": {
+        "acmgr_offset": "0x8bc20",
+        "acmgr_signature": null,
+        "gates": [
+          { "offset": "0x41f4e5" },
+          { "offset": "0x41f9d1" }
+        ]
+      },
+      "avcap": {
+        "module": "libSceAvcap.sprx",
+        "module_size": "0x1c000",
+        "init": "0x940",
+        "trap": "0xbe",
+        "trap_evidence": "smoke log: RemotePlay call entry=8101fc0be, i.e. page-aligned base + 0xbe",
+        "ready_delta": null,
+        "dequeue_delta": null,
+        "consume_delta": null,
+        "ring_state_offset": null,
+        "exports": {
+          "init": "0x940",
+          "term": "0xaa0",
+          "set_static_info": "0xb70",
+          "get_static_info": "0xb30",
+          "open_video": "0x10c0",
+          "start": "0x1210",
+          "get_info": "0x15d0",
+          "set_info": "0x1640",
+          "stop": "0x1700",
+          "close": "0x1730",
+          "read_video": "0x14a0"
+        }
+      },
+      "libraries": {
+        "libc_malloc": { "module": "libSceLibcInternal.sprx", "rva": "0x51220" },
+        "libc_free": { "module": "libSceLibcInternal.sprx", "rva": "0x51230" },
+        "kernel_getpid": { "module": "libkernel_sys.sprx", "rva": "0x7e0" },
+        "kernel_usleep": { "module": "libkernel_sys.sprx", "rva": "0xf290" }
+      },
+      "remoteplay": {
+        "nn_socket": null,
+        "vtable": null,
+        "data": null,
+        "data_size": null,
+        "ensure_open": null
+      },
+      "capture": {
+        "flags": null,
+        "slots": null,
+        "object_head": null,
+        "profile2_vtable": null,
+        "check": null,
+        "caps": null,
+        "latch_site": null
+      },
+      "notes": "Kernel layout discovered at runtime and accepted (unique match): the acmgr stub and both gates are measurable. The dump payload used to print status=unavailable without even probing, because it guarded discovery with KERNEL_ADDRESS_IMAGE_BASE > 0 and that intptr_t is negative on hardware; fixed on 2026-10-28 via pbs_ps4_layout_available(), so the next dump on this console reports the probe line and the signature bytes. Module-internal deltas and rp_*/capture_* are unmeasured; they are only needed by the non-exported read path (PBS_PS4_EXPORTED_READ=0)."
+    },
+    {
+      "release": "11.00",
+      "version": "0x11000000",
+      "version_mask": "0xffff0000",
+      "measured_on": "0x11008001",
+      "evidence": [
+        "PS4-DUMP v1 report (dump.txt / offsets.txt) on fw 0x11008001",
+        "legacy static profile pbs_ps4_fw_1100 in payload/src/platform/ps4/system/firmware.h",
+        "latch/admission experiments on FW 11.00 (see docs/PS4_FW11_*.md)"
+      ],
+      "kernel": {
+        "acmgr_offset": "0x3d0de0",
+        "acmgr_signature": [176, 1, 195],
+        "gates": [
+          { "offset": "0x384285", "before": [119, 28], "after": [235, 28], "size": 2 },
+          { "offset": "0x384771", "before": [72, 139, 65, 8, 68], "after": [233, 124, 2, 0, 0], "size": 5 }
+        ]
+      },
+      "avcap": {
+        "module": "libSceAvcap.sprx",
+        "module_size": "0x1c000",
+        "init": "0x940",
+        "trap": "0xbe",
+        "trap_evidence": "profile value, validated by the trampoline experiments",
+        "ready_delta": "0xfa0",
+        "dequeue_delta": "0x12d0",
+        "consume_delta": "0x1470",
+        "ring_state_offset": "0x8",
+        "exports": {
+          "init": "0x940",
+          "term": "0xaa0",
+          "set_static_info": "0xb70",
+          "get_static_info": "0xb30",
+          "open_video": "0x10c0",
+          "start": "0x1210",
+          "get_info": "0x15d0",
+          "set_info": "0x1640",
+          "stop": "0x1700",
+          "close": "0x1730",
+          "read_video": "0x14a0"
+        }
+      },
+      "libraries": {
+        "libc_malloc": { "module": "libSceLibcInternal.sprx", "rva": "0x28d60" },
+        "libc_free": { "module": "libSceLibcInternal.sprx", "rva": "0x28d70" },
+        "kernel_getpid": { "module": "libkernel_sys.sprx", "rva": "0x7e0" },
+        "kernel_usleep": { "module": "libkernel_sys.sprx", "rva": "0xefd0" }
+      },
+      "remoteplay": {
+        "nn_socket": "0x1fdf60",
+        "vtable": "0x529838",
+        "data": "0x538000",
+        "data_size": "0x19000",
+        "ensure_open": "0x2fd250"
+      },
+      "capture": {
+        "flags": "0x240a0",
+        "slots": "0x26718",
+        "object_head": "0x26900",
+        "profile2_vtable": "0x20ab8",
+        "check": "0x7fc0",
+        "caps": "0x9d50",
+        "latch_site": {
+          "offset": "0x9d9c",
+          "size": 5,
+          "before": [37, 191, 253, 255, 255],
+          "after": [37, 187, 253, 255, 255]
+        }
+      },
+      "notes": "Only firmware with a complete legacy profile. A dump on fw 0x11008001 confirms the whole exported Avcap table and the module size; kernel layout discovery failed on that dump run because of the KERNEL_ADDRESS_IMAGE_BASE > 0 guard, fixed on 2026-10-28, so acmgr/gates/signature still come from the profile until a new dump on this firmware lands. The non-exported internals (deltas, rp_*, capture_*) remain profile-only values."
+    }
+  ]
+}

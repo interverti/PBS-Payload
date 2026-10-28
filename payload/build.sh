@@ -13,7 +13,7 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 case "$platform" in
   ps4) sdk=${PS4_PAYLOAD_SDK:?Set PS4_PAYLOAD_SDK}; compiler="$sdk/bin/orbis-clang" ;;
   ps5) sdk=${PS5_PAYLOAD_SDK:?Set PS5_PAYLOAD_SDK}; compiler="$sdk/bin/prospero-clang" ;;
-  *) echo 'Usage: build.sh ps4|ps5 [stream|probe]' >&2; exit 2 ;;
+  *) echo 'Usage: build.sh ps4|ps5 [stream|smoke|probe|dump]' >&2; exit 2 ;;
 esac
 includes=(-I"$root/src" -I"$root/build/generated")
 out="$root/build/$platform"
@@ -31,6 +31,14 @@ if [[ $kind == worker-probe && $platform == ps4 ]]; then
   python3 "$root/../tools/verify_ps4_worker_blob.py" "$out/pbs-worker-probe.elf"
 elif [[ $kind == probe && $platform == ps4 ]]; then
   "$compiler" "${includes[@]}" -O2 "${debug_flags[@]}" -Wall -Wextra -Werror "$root/src/platform/ps4/diagnostics/probe.c" -o "$out/pbs-probe.elf"
+elif [[ $kind == dump && $platform == ps4 ]]; then
+  # Read-only offset report. No capture, no patch, no module image here: run
+  # the probe payload for the module ELFs and tools/ps4_offsets.py offline.
+  # The payload sources themselves live in tools/dump/ps4: this is a
+  # measurement tool, not part of the capture payload.
+  "$compiler" "${includes[@]}" -I"$root/../tools" -O2 "${debug_flags[@]}" -Wall -Wextra -Werror \
+    "$root/../tools/dump/ps4/dump_main.c" "$root/../tools/dump/ps4/offset_report.c" \
+    "$root/src/platform/ps4/system/layout.c" -o "$out/pbs-dump.elf"
 elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
   python3 "$root/embed_assets.py"
   if [[ $platform == ps4 ]]; then
@@ -214,9 +222,12 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
       sources+=("$offset_source")
     done
     defines=()
-    if [[ ${PBS_PS5_EXPERIMENTAL_FW400:-0} == 1 ]]; then
-      defines+=(-DPBS_PS5_EXPERIMENTAL_FW400)
-    fi
+    for gate in 400; do
+      name=PBS_PS5_EXPERIMENTAL_FW$gate
+      if [[ ${!name:-0} == 1 ]]; then
+        defines+=("-D$name")
+      fi
+    done
   fi
   filename=pbs.elf
   if [[ $platform == ps4 && $kind == stream && $remote_avcap == 1 ]]; then

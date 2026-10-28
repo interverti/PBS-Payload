@@ -504,12 +504,25 @@ def fw_name(fw: int) -> str:
     return f"{fw >> 24:x}{(fw >> 16) & 0xff:02x}".lstrip("0") or "0"
 
 
+# Profiles that ship compiled but are never selected by default: the dump behind
+# them is incomplete. Each one is gated by its own define so a console can test it
+# explicitly.
+GATED_PROFILES = {
+    0x04000042: "firmware 4.00 dump has a one-byte RIP/rodata mismatch",
+}
+
+
+def gate_define(fw: int) -> str:
+    return "PBS_PS5_EXPERIMENTAL_FW" + fw_name(fw).upper()
+
+
 def render_profile(fw: int, result: dict) -> str:
     h = lambda value: f"0x{value:x}u"
     lines = ["// SPDX-License-Identifier: GPL-3.0-or-later"]
-    if fw == 0x04000042:
-        lines += ["// EXPERIMENTAL: firmware 4.00 dump has a one-byte RIP/rodata mismatch.",
-                  "// The profile is disabled in normal payload builds pending hardware verification."]
+    reason = GATED_PROFILES.get(fw)
+    if reason:
+        lines += [f"// EXPERIMENTAL: {reason}.",
+                  f"// Disabled in normal payload builds: compile with -D{gate_define(fw)}."]
     lines += ['#include "platform/ps5/offset/profile.h"', "",
              f"const pbs_ps5_offset_profile pbs_ps5_offsets_{fw_name(fw)} = {{",
              f"  .firmware = 0x{fw:08x}u,",
@@ -560,9 +573,124 @@ def existing_profiles(directory: Path) -> dict[int, Path]:
     return known
 
 
+def read_profile_fields(path: Path) -> dict:
+    """Read a measured profile so its geometry can be reused verbatim."""
+    text = path.read_text(encoding="utf-8")
+
+    def number(pattern: str) -> int:
+        match = re.search(pattern, text)
+        if not match:
+            raise ValueError(f"{path.name}: missing {pattern}")
+        return int(match.group(1), 16)
+
+    def group(name: str) -> str:
+        match = re.search(r"\.%s\s*=\s*\{(.*?)\}," % name, text, re.S)
+        if not match:
+            raise ValueError(f"{path.name}: missing .{name} group")
+        return match.group(1)
+
+    def member(block: str, field: str) -> int:
+        match = re.search(r"\.%s\s*=\s*0x([0-9a-fA-F]+)u" % field, block)
+        if not match:
+            raise ValueError(f"{path.name}: missing {field}")
+        return int(match.group(1), 16)
+
+    rate, image = group("rate"), group("image")
+    span = re.search(r"\.mask_span\s*=\s*0x([0-9a-fA-F]+)u", text)
+    return {
+        "open_video": number(r"\.open_video_rva\s*=\s*0x([0-9a-fA-F]+)u"),
+        "ipc_command": number(r"\.ipc_command_instruction_rva\s*=\s*0x([0-9a-fA-F]+)u"),
+        "size": number(r"\.request_size\s*=\s*0x([0-9a-fA-F]+)u"),
+        "kind": number(r"\.kind_offset\s*=\s*0x([0-9a-fA-F]+)u"),
+        "constructor": number(r"\.request_size_store_rva\s*=\s*0x([0-9a-fA-F]+)u"),
+        "rate_group": member(rate, "offset"),
+        "rate_group_size": member(rate, "size"),
+        "rate_descriptor_size": member(rate, "descriptor_size"),
+        "image_group": member(image, "offset"),
+        "image_group_size": member(image, "size"),
+        "image_descriptor_size": member(image, "descriptor_size"),
+        "width": number(r"\.width_offset\s*=\s*0x([0-9a-fA-F]+)u"),
+        "height": number(r"\.height_offset\s*=\s*0x([0-9a-fA-F]+)u"),
+        "image_paste": number(r"\.paste_offset\s*=\s*0x([0-9a-fA-F]+)u"),
+        "video_mode": number(r"\.video_mode_offset\s*=\s*0x([0-9a-fA-F]+)u"),
+        "mask_mode": number(r"\.mask_mode_offset\s*=\s*0x([0-9a-fA-F]+)u"),
+        "mask_span": int(span.group(1), 16) if span else 0x24,
+    }
+
+
+def write_registry(directory: Path, known: dict[int, Path]) -> None:
+    """Render registry.c from the profiles on disk, gating inferred entries."""
+    firmware_ids = sorted(known)
+    symbols = [f"pbs_ps5_offsets_{fw_name(fw)}" for fw in firmware_ids]
+    registry = ['// SPDX-License-Identifier: GPL-3.0-or-later',
+                '#include "platform/ps5/offset/profile.h"', ""]
+    registry += [f"extern const pbs_ps5_offset_profile {name};" for name in symbols]
+    registry += ["", "const pbs_ps5_offset_profile *pbs_ps5_find_offsets(uint32_t firmware) {",
+                 "  switch (firmware) {"]
+    for fw in firmware_ids:
+        case = f"    case 0x{fw:08x}u: return &pbs_ps5_offsets_{fw_name(fw)};"
+        if fw in GATED_PROFILES:
+            # An inferred or unverified profile must never be selected by default.
+            registry += [f"#ifdef {gate_define(fw)}", case, "#endif"]
+        else:
+            registry.append(case)
+    registry += ["    default: break;", "  }", "",
+                 "  /* Exact profiles take precedence. Reuse geometry only inside the",
+                 "   * audited family bounds, including other builds of each release. */"]
+    active_ranges = [r for r in FIRMWARE_RANGES if r[2] in known]
+    if active_ranges:
+        registry += ["  const uint32_t version = firmware & 0xffff0000u;",
+                     "  /* Only catalogued public releases may use a family fallback. */",
+                     "  switch (version) {"]
+        for release in catalog_release_keys():
+            if any(lower <= release <= upper for lower, upper, _ in active_ranges):
+                registry += [f"    case 0x{release:08x}u:"]
+        registry += ["      break;", "    default: return 0;", "  }"]
+    for lower, upper, reference in active_ranges:
+        registry += [f"  if (version >= 0x{lower:08x}u && version <= 0x{upper:08x}u)",
+                     f"    return &pbs_ps5_offsets_{fw_name(reference)};"]
+    registry += ["  return 0;", "}", ""]
+    registry_path = directory / "registry.c"
+    registry_text = "\n".join(registry)
+    if not registry_path.exists() or registry_path.read_text(encoding="utf-8") != registry_text:
+        registry_path.write_text(registry_text, encoding="utf-8")
+        print(f"updated {registry_path.name}")
+
+
+def infer_profiles(directory: Path, specs: list[str]) -> int:
+    """Render a gated profile from a measured one, then rebuild the registry."""
+    known = existing_profiles(directory)
+    for spec in specs:
+        if "=" not in spec:
+            raise SystemExit(f"--infer expects FIRMWARE=PROFILE, got {spec!r}")
+        firmware_text, source_name = spec.split("=", 1)
+        try:
+            fw = int(firmware_text, 16)
+        except ValueError:
+            raise SystemExit(f"{firmware_text!r} is not a hex firmware id") from None
+        if fw not in GATED_PROFILES:
+            raise SystemExit(f"0x{fw:08x}: only gated profiles can be inferred; record the "
+                             "evidence in GATED_PROFILES first")
+        matches = [path for known_fw, path in known.items()
+                   if path.stem == source_name or fw_name(known_fw) == source_name]
+        if len(matches) != 1:
+            raise SystemExit(f"{source_name}: expected one measured profile, found {len(matches)}")
+        source = matches[0]
+        text = render_profile(fw, read_profile_fields(source))
+        path = directory / f"{fw_name(fw)}.c"
+        if not path.exists() or path.read_text(encoding="utf-8") != text:
+            path.write_text(text, encoding="utf-8")
+        known[fw] = path
+        print(f"{fw:08x}: {path.name} inferred from {source.name} "
+              f"({GATED_PROFILES[fw]})")
+    write_registry(directory, known)
+    print(f"registered {len(known)} profiles in {directory}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("dumps", type=Path,
+    parser.add_argument("dumps", type=Path, nargs="?",
                         help="directory containing firmware ZIP, RAR, 7z or TAR dumps")
     parser.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[1] /
                         "payload/src/platform/ps5/offset")
@@ -574,7 +702,13 @@ def main() -> int:
                         r"C:\Program Files\7-Zip\7z.exe")
     parser.add_argument("--verbose", action="store_true",
                         help="print individual rejected dump reasons")
+    parser.add_argument("--infer", metavar="FIRMWARE=PROFILE", action="append", default=[],
+                        help="render a gated profile from a measured one, e.g. 0x04000042=602")
     args = parser.parse_args()
+    if args.infer:
+        return infer_profiles(args.out, args.infer)
+    if args.dumps is None:
+        parser.error("a dump directory is required unless --infer is used")
     reference_explicit = args.reference_940 is not None
     if args.reference_940 is None:
         sibling_reference = (Path(__file__).resolve().parents[2] / "PBS" /
@@ -585,13 +719,21 @@ def main() -> int:
     for archive in sorted(args.dumps.iterdir()):
         if archive.suffix.lower() not in (".zip", ".rar", ".7z", ".tar"):
             continue
+        unnamed = []
         for name, data in load_members(archive, args.seven_zip).items():
             match = FW_RE.search(name)
             if not match:
+                unnamed.append(name)
                 continue
             fw = int(match.group(1), 16)
             key = "avcap" if name.endswith(MODULE) else "eboot"
             gathered.setdefault(fw, {}).setdefault(key, []).append((data, archive.name + ":" + name))
+        if unnamed:
+            # A flat archive copied out of a run directory loses the firmware ID:
+            # say so instead of skipping it silently.
+            print(f"{archive.name}: {len(unnamed)} memory image(s) outside a "
+                  f"ps5-<firmware>- run directory, firmware ID unknown "
+                  f"({', '.join(sorted(unnamed)[:2])})")
     profiles = {}
     for fw, members in sorted(gathered.items()):
         avcap = []
@@ -656,43 +798,8 @@ def main() -> int:
             path.write_text(generated, encoding="utf-8")
             print(f"{fw:08x}: wrote {path.name}")
         known[fw] = path
-    firmware_ids = sorted(known)
-    symbols = [f"pbs_ps5_offsets_{fw_name(fw)}" for fw in firmware_ids]
-    registry = ['// SPDX-License-Identifier: GPL-3.0-or-later',
-                '#include "platform/ps5/offset/profile.h"', ""]
-    registry += [f"extern const pbs_ps5_offset_profile {name};" for name in symbols]
-    registry += ["", "const pbs_ps5_offset_profile *pbs_ps5_find_offsets(uint32_t firmware) {",
-                 "  switch (firmware) {"]
-    for fw in firmware_ids:
-        case = f"    case 0x{fw:08x}u: return &pbs_ps5_offsets_{fw_name(fw)};"
-        if fw == 0x04000042:
-            # The 4.00 loaded dump has RIP-relative data displaced by one
-            # byte; never select this inferred profile in normal builds.
-            registry += ["#ifdef PBS_PS5_EXPERIMENTAL_FW400", case, "#endif"]
-        else:
-            registry.append(case)
-    registry += ["    default: break;", "  }", "",
-                 "  /* Exact profiles take precedence. Reuse geometry only inside the",
-                 "   * audited family bounds, including other builds of each release. */"]
-    active_ranges = [r for r in FIRMWARE_RANGES if r[2] in known]
-    if active_ranges:
-        registry += ["  const uint32_t version = firmware & 0xffff0000u;",
-                     "  /* Only catalogued public releases may use a family fallback. */",
-                     "  switch (version) {"]
-        for release in catalog_release_keys():
-            if any(lower <= release <= upper for lower, upper, _ in active_ranges):
-                registry += [f"    case 0x{release:08x}u:"]
-        registry += ["      break;", "    default: return 0;", "  }"]
-    for lower, upper, reference in active_ranges:
-        registry += [f"  if (version >= 0x{lower:08x}u && version <= 0x{upper:08x}u)",
-                     f"    return &pbs_ps5_offsets_{fw_name(reference)};"]
-    registry += ["  return 0;", "}", ""]
-    registry_path = args.out / "registry.c"
-    registry_text = "\n".join(registry)
-    if not registry_path.exists() or registry_path.read_text(encoding="utf-8") != registry_text:
-        registry_path.write_text(registry_text, encoding="utf-8")
-        print(f"updated {registry_path.name}")
-    print(f"registered {len(firmware_ids)} profiles in {args.out}")
+    write_registry(args.out, known)
+    print(f"registered {len(known)} profiles in {args.out}")
     return 0
 
 

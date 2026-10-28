@@ -4,6 +4,10 @@
 #include <stdio.h>
 
 int main(void) {
+  /* This translation unit exercises the legacy diagnostic table only, and that
+   * table carries the single measured 11.00 profile. 9.00 is not "unsupported":
+   * normal builds use PBS_PS4_DYNAMIC_LAYOUT=1 and accept it from code evidence
+   * (tests/ps4/system/layout_runtime.c pins that path). */
   const pbs_ps4_firmware *p = pbs_ps4_firmware_find(0x11008001u);
   assert(p && pbs_ps4_firmware_find(0x11000000u) == p);
   const uint32_t unsupported[] = {0, 0x09008001u, 0x10008001u, 0x11018001u,

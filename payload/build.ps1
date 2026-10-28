@@ -137,12 +137,17 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $toolDir = if ($IsWindows -or $env:OS -eq 'Windows_NT') { Join-Path $sdk 'win' } else { Join-Path $sdk 'bin' }
 if (Test-Path $toolDir) { $env:PATH = "$toolDir;$env:PATH" }
 
+# The dump payloads are measurement tools: their entry points live under
+# tools/dump/<platform>/, outside the capture payload sources.
+$repoRoot = Split-Path -Parent $PSScriptRoot
 $sourceNames = if ($Kind -eq 'dump') {
-  @('platform/ps5/dump_main.c', 'platform/ps5/module_dump.c')
+  @('platform/ps5/module_dump.c', 'tools/dump/ps5/dump_main.c')
 } else {
   @('platform/ps5/main.c', 'platform/ps5/offset_dump.c', 'platform/ps5/module_dump.c', 'common/process/inject.c', 'common/http/server.c')
 }
-$sources = $sourceNames | ForEach-Object { Join-Path $PSScriptRoot ('src/' + $_) }
+$sources = $sourceNames | ForEach-Object {
+  if ($_ -like 'tools/*') { Join-Path $repoRoot $_ } else { Join-Path $PSScriptRoot ('src/' + $_) }
+}
 if ($Kind -eq 'stream') {
   $offsetDir = Join-Path $PSScriptRoot 'src/platform/ps5/offset'
   $sources += @(Get-ChildItem -LiteralPath $offsetDir -Filter '*.c' -File |

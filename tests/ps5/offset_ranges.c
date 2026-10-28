@@ -16,7 +16,8 @@ int main(void) {
     {0x08400005,0x2a8}, {0x09200005,0x2b0}, {0x09400008,0x2b0},
     {0x10010000,0x2b8}, {0x10600006,0x2b8}, {0x11400005,0x2e0},
     {0x11600005,0x2e0}, {0x12000043,0x2e0}, {0x12400009,0x2e0},
-    {0x12700001,0x2e0}, {0x13600007,0x2e8}
+    {0x12700001,0x2e0}, {0x13000040,0x2e0}, {0x13420000,0x2e8},
+    {0x13600007,0x2e8}
   };
   for (unsigned i = 0; i < sizeof exact / sizeof exact[0]; ++i)
     check(exact[i][0],exact[i][0],exact[i][1]);
@@ -48,6 +49,14 @@ int main(void) {
   check(0x12200001,0x11600005,0x2e0);
   check(0x12600001,0x11600005,0x2e0);
   check(0x13420001,0x13600007,0x2e8);
+  /* 13.00 is exact-only: its geometry (0x2e0) differs from the 13.40/13.60
+   * family (0x2e8), so no range may stand in for another 13.00 build. */
+  check(0x13000041,0,0);
+  /* 13.20 is exact-only too: the 2026-10-28 dump measured build 0x13200006
+   * (request 0x2e0), so no other 13.20 build may borrow that geometry. */
+  check(0x13200006,0x13200006,0x2e0);
+  check(0x13200000,0,0);
+  check(0x13200001,0,0);
   /* Numerically inside a family but absent from the supplied release list. */
   check(0x09300009,0,0);
   check(0x11500001,0,0);

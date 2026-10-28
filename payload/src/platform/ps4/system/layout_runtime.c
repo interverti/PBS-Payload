@@ -10,7 +10,7 @@ static int read_kernel(void *opaque, uint64_t at, void *out, size_t size) {
 const pbs_ps4_firmware *pbs_ps4_firmware_find(uint32_t version) {
   static pbs_ps4_firmware layout;
   static uint64_t resolved_base;
-  if (!KERNEL_ADDRESS_IMAGE_BASE || !KERNEL_IMAGE_SIZE) return NULL;
+  if (!pbs_ps4_layout_available(KERNEL_ADDRESS_IMAGE_BASE, KERNEL_IMAGE_SIZE)) return NULL;
   if (resolved_base) return resolved_base==(uint64_t)KERNEL_ADDRESS_IMAGE_BASE &&
                             layout.version==version ? &layout : NULL;
   if (pbs_ps4_layout_kernel(read_kernel,NULL,(uint64_t)KERNEL_ADDRESS_IMAGE_BASE,

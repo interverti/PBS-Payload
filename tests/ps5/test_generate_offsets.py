@@ -1,6 +1,7 @@
 """Regressions for the PS5 firmware dump parser and safe profile generation."""
 
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -10,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parents[2] / "tools"
+PROFILES = TOOLS.parent / "payload/src/platform/ps5/offset"
 sys.path.insert(0, str(TOOLS))
 import generate_ps5_offsets as offsets
 
@@ -131,6 +133,83 @@ class GenerateOffsetsTests(unittest.TestCase):
             self.assertIn("#ifdef PBS_PS5_EXPERIMENTAL_FW400", registry)
             self.assertIn("case 0x04000042u:", registry)
             self.assertIn("#endif", registry)
+
+    def test_inferred_profile_is_gated_and_copied_from_its_source(self):
+        """The inferred path still exists; 4.00 is the only gated target left."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            out.mkdir()
+            shutil.copy(PROFILES / "602.c", out / "602.c")
+            command = [sys.executable, str(TOOLS / "generate_ps5_offsets.py"),
+                       "--infer", "0x04000042=602", "--out", str(out)]
+            result = subprocess.run(command, check=True, capture_output=True, text=True)
+            self.assertIn("inferred from 602.c", result.stdout)
+            profile = (out / "400.c").read_text(encoding="utf-8")
+            self.assertIn(".firmware = 0x04000042u,", profile)
+            self.assertIn(".request_size = 0x2a8u,", profile)
+            self.assertIn("EXPERIMENTAL", profile)
+            self.assertIn("PBS_PS5_EXPERIMENTAL_FW400", profile)
+            registry = (out / "registry.c").read_text(encoding="utf-8")
+            self.assertIn("#ifdef PBS_PS5_EXPERIMENTAL_FW400\n"
+                          "    case 0x04000042u: return &pbs_ps5_offsets_400;\n#endif",
+                          registry)
+            # Re-running must not rewrite anything.
+            again = subprocess.run(command, check=True, capture_output=True, text=True)
+            self.assertNotIn("updated registry.c", again.stdout)
+
+    def test_measured_1320_profile_is_exact_and_ungated(self):
+        profile = (PROFILES / "1320.c").read_text(encoding="utf-8")
+        self.assertIn(".firmware = 0x13200006u,", profile)
+        self.assertNotIn("EXPERIMENTAL", profile)
+        registry = (PROFILES / "registry.c").read_text(encoding="utf-8")
+        self.assertIn("    case 0x13200006u: return &pbs_ps5_offsets_1320;", registry)
+        self.assertNotIn("#ifdef PBS_PS5_EXPERIMENTAL_FW1320", registry)
+        # The measured geometry is the 13.00 one; the 0x2e8 bump starts at 13.42.
+        self.assertIn(".request_size = 0x2e0u,", profile)
+        self.assertIn(".kind_offset = 0x1a0u,", profile)
+        self.assertIn(".request_size_store_rva = 0x6f888u,", profile)
+
+    def test_inferring_an_ungated_firmware_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            out.mkdir()
+            shutil.copy(PROFILES / "1300.c", out / "1300.c")
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                subprocess.run([sys.executable, str(TOOLS / "generate_ps5_offsets.py"),
+                                "--infer", "0x13200001=1300", "--out", str(out)],
+                               check=True, capture_output=True, text=True)
+            self.assertIn("only gated profiles can be inferred", caught.exception.stderr)
+
+    def test_inferring_a_measured_firmware_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            out.mkdir()
+            shutil.copy(PROFILES / "1300.c", out / "1300.c")
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                subprocess.run([sys.executable, str(TOOLS / "generate_ps5_offsets.py"),
+                                "--infer", "0x13200006=1300", "--out", str(out)],
+                               check=True, capture_output=True, text=True)
+            self.assertIn("only gated profiles can be inferred", caught.exception.stderr)
+
+    def test_historical_400_comment_matches_the_rendered_profile(self):
+        result = offsets.read_profile_fields(PROFILES / "400.c")
+        rendered = offsets.render_profile(0x04000042, result)
+        self.assertEqual(rendered, (PROFILES / "400.c").read_text(encoding="utf-8"))
+
+    def test_flat_archive_without_run_directory_reports_unknown_firmware(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dumps, out = root / "dumps", root / "out"
+            dumps.mkdir()
+            out.mkdir()
+            with zipfile.ZipFile(dumps / "fw13.20.zip", "w") as z:
+                z.writestr("fw13.20/eboot.bin.prefix.bin", b"EBOOT")
+            result = subprocess.run([sys.executable, str(TOOLS / "generate_ps5_offsets.py"),
+                                     str(dumps), "--out", str(out)],
+                                    check=True, capture_output=True, text=True)
+            self.assertIn("fw13.20.zip", result.stdout)
+            self.assertIn("firmware ID unknown", result.stdout)
+            self.assertEqual([p.name for p in out.glob("*.c")], ["registry.c"])
 
     def test_real_legacy_layouts_when_dumps_provided(self):
         dumps = os.environ.get("PBS_PS5_DUMPS")

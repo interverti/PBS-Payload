@@ -1,0 +1,223 @@
+{
+  "schema": 1,
+  "platform": "ps5",
+  "notes": "Ledger of what the PS5 selector can prove. Values live in the profiles; this file records status, evidence and the releases that are refused on purpose. tools/ps5_firmware_table.py --check fails when the ledger, the profiles, registry.c, the generator ranges and the public release catalog disagree.",
+  "catalog": "tools/ps5_firmware_releases.json",
+  "profiles_dir": "payload/src/platform/ps5/offset",
+  "ranges_source": "tools/generate_ps5_offsets.py",
+  "firmwares": [
+    {
+      "release": "3.20",
+      "firmware": "0x03200004",
+      "profile": "320",
+      "status": "exact",
+      "expected": {"request_size": "0x218", "kind_offset": "0xe8", "native_size_store_rva": "0x1af429"},
+      "source": "fw3.20.zip",
+      "notes": "mask tail is 0x14 bytes, not 0x24: the newer trailer would write past the 0x218 request"
+    },
+    {
+      "release": "4.00",
+      "firmware": "0x04000042",
+      "profile": "400",
+      "status": "exact",
+      "experimental": true,
+      "expected": {"request_size": "0x230", "kind_offset": "0x100", "native_size_store_rva": "0x1b7f12"},
+      "source": "fw4.00.7z",
+      "notes": "systematic +1-byte RIP/rodata mismatch in the dump; compiled only with PBS_PS5_EXPERIMENTAL_FW400"
+    },
+    {
+      "release": "6.02",
+      "firmware": "0x06020004",
+      "profile": "602",
+      "status": "exact",
+      "expected": {"request_size": "0x2a8", "kind_offset": "0x168", "native_size_store_rva": "0x4a03a"},
+      "source": "fw6.02.zip",
+      "notes": "constructor writes a 128-bit header constant instead of an immediate store"
+    },
+    {
+      "release": "7.20",
+      "firmware": "0x07200005",
+      "profile": "720",
+      "status": "exact",
+      "expected": {"request_size": "0x2a8", "kind_offset": "0x168", "native_size_store_rva": "0x4ae06"},
+      "source": "fw7.20.zip"
+    },
+    {
+      "release": "8.40",
+      "firmware": "0x08400005",
+      "profile": "840",
+      "status": "exact",
+      "expected": {"request_size": "0x2a8", "kind_offset": "0x168", "native_size_store_rva": "0x4b6bd"},
+      "source": "FW-8.40.zip"
+    },
+    {
+      "release": "9.20",
+      "firmware": "0x09200005",
+      "profile": "920",
+      "status": "exact",
+      "expected": {"request_size": "0x2b0", "kind_offset": "0x168", "native_size_store_rva": "0x4da1d"},
+      "source": "fw9.20.zip"
+    },
+    {
+      "release": "9.40",
+      "firmware": "0x09400008",
+      "profile": "940",
+      "status": "exact",
+      "expected": {"request_size": "0x2b0", "kind_offset": "0x168", "native_size_store_rva": "0x0"},
+      "source": "fw9.40.zip",
+      "notes": "no native RemotePlay image in the dump: native_size_store_rva 0x0 means inherited from 9.20; the Avcap2 ABI is measured on 9.40 itself"
+    },
+    {
+      "release": "10.01",
+      "firmware": "0x10010000",
+      "profile": "1001",
+      "status": "exact",
+      "expected": {"request_size": "0x2b8", "kind_offset": "0x188", "native_size_store_rva": "0x4d5ad"},
+      "source": "fw10.01.rar"
+    },
+    {
+      "release": "10.60",
+      "firmware": "0x10600006",
+      "profile": "1060",
+      "status": "exact",
+      "expected": {"request_size": "0x2b8", "kind_offset": "0x188", "native_size_store_rva": "0x4d5ad"},
+      "source": "fw1060.zip",
+      "notes": "independently extracted from the 10.60 dump; identical to 10.01"
+    },
+    {
+      "release": "11.40",
+      "firmware": "0x11400005",
+      "profile": "1140",
+      "status": "exact",
+      "expected": {"request_size": "0x2e0", "kind_offset": "0x1a0", "native_size_store_rva": "0x56fc8"},
+      "source": "fw1140_ps5pro-PBS.zip",
+      "notes": "PS5 Pro dump; first profile with the 0x2e0 request"
+    },
+    {
+      "release": "11.60",
+      "firmware": "0x11600005",
+      "profile": "1160",
+      "status": "exact",
+      "expected": {"request_size": "0x2e0", "kind_offset": "0x1a0", "native_size_store_rva": "0x56fc8"},
+      "source": "fw11.60.zip"
+    },
+    {
+      "release": "12.00",
+      "firmware": "0x12000043",
+      "profile": "1200",
+      "status": "exact",
+      "expected": {"request_size": "0x2e0", "kind_offset": "0x1a0", "native_size_store_rva": "0x57808"},
+      "source": "fw12.0.zip"
+    },
+    {
+      "release": "12.40",
+      "firmware": "0x12400009",
+      "profile": "1240",
+      "status": "exact",
+      "expected": {"request_size": "0x2e0", "kind_offset": "0x1a0", "native_size_store_rva": "0x58168"},
+      "source": "fw12.40.zip"
+    },
+    {
+      "release": "12.70",
+      "firmware": "0x12700001",
+      "profile": "1270",
+      "status": "exact",
+      "expected": {"request_size": "0x2e0", "kind_offset": "0x1a0", "native_size_store_rva": "0x58168"},
+      "source": "fw12.70.zip",
+      "notes": "only firmware with a runtime video-mode fallback policy (capture_fallback.h); the policy keys on the real fw id"
+    },
+    {
+      "release": "13.00",
+      "firmware": "0x13000040",
+      "profile": "1300",
+      "status": "exact",
+      "expected": {"request_size": "0x2e0", "kind_offset": "0x1a0", "native_size_store_rva": "0x6f888"},
+      "source": "pbs-dump-fw13.00.zip",
+      "notes": "same request as 12.70 but a new IPC RVA (0x4507) and constructor (0x6f888); deliberately exact-only, so another 13.00 build is refused instead of inheriting an unproven geometry"
+    },
+    {
+      "release": "13.42",
+      "firmware": "0x13420000",
+      "profile": "1342",
+      "status": "exact",
+      "expected": {"request_size": "0x2e8", "kind_offset": "0x1a8", "native_size_store_rva": "0x6f8d8"},
+      "source": "ps5-13420000-1793122.tar",
+      "notes": "byte-identical to 13.60; confirms the 13.40-13.60 family range"
+    },
+    {
+      "release": "13.60",
+      "firmware": "0x13600007",
+      "profile": "1360",
+      "status": "exact",
+      "expected": {"request_size": "0x2e8", "kind_offset": "0x1a8", "native_size_store_rva": "0x6f8d8"},
+      "source": "fw13.60.rar"
+    },
+    {
+      "release": "9.00",
+      "firmware": "0x09000000",
+      "status": "unmeasured",
+      "reason": "no dump; the 9.20-9.40 family does not cover 9.00 and its geometry is unknown",
+      "candidates": ["920"],
+      "missing": ["libSceAvcap2.sprx.prefix.bin", "SceRemotePlay eboot.bin.prefix.bin"]
+    },
+    {
+      "release": "9.60",
+      "firmware": "0x09600000",
+      "status": "unmeasured",
+      "reason": "no dump; the audited 9.20-9.40 family ends at 9.40",
+      "candidates": ["920"],
+      "missing": ["libSceAvcap2.sprx.prefix.bin", "SceRemotePlay eboot.bin.prefix.bin"]
+    },
+    {
+      "release": "11.00",
+      "firmware": "0x11000000",
+      "status": "unmeasured",
+      "reason": "no dump; it sits between the 10.01-10.60 and 11.40-12.70 families, which use different request sizes",
+      "candidates": ["1001", "1160"],
+      "missing": ["libSceAvcap2.sprx.prefix.bin", "SceRemotePlay eboot.bin.prefix.bin"]
+    },
+    {
+      "release": "13.20",
+      "firmware": "0x13200006",
+      "status": "exact",
+      "profile": "1320",
+      "expected": {
+        "request_size": "0x2e0",
+        "kind_offset": "0x1a0",
+        "native_size_store_rva": "0x6f888"
+      },
+      "source": "fw13.20.zip",
+      "sha256": "F3193232CE2842B79FDCBFEBAA02375271D5A07C697D3AF9B68DC9FAD934D0BB",
+      "evidence": "PS5 dump of fw 0x13200006 (2026-10-28): SceRemotePlay pid 61 saved a 4 MiB libSceAvcap2.sprx.prefix.bin with no missing pages, and both pid dumps agree on the 18664-byte disk SELF (fnv64 0x92a4f798b89a503d)",
+      "notes": "measured request 0x2e0 / kind 0x1a0 / constructor 0x6f888, i.e. the 13.00 geometry: the 0x2e8 bump starts at 13.42. Deliberately exact-only, so another 13.20 build is refused instead of inheriting this geometry. The earlier gated copy of 13.00 guessed right but was never shipped enabled"
+    },
+    {
+      "release": "14.00",
+      "firmware": "0x14000000",
+      "status": "unmeasured",
+      "reason": "no dump; beyond the last audited family (13.40-13.60)",
+      "candidates": ["1360"],
+      "missing": ["libSceAvcap2.sprx.prefix.bin", "SceRemotePlay eboot.bin.prefix.bin"]
+    },
+    {
+      "release": "14.10",
+      "firmware": "0x14100000",
+      "status": "unmeasured",
+      "reason": "no dump; beyond the last audited family (13.40-13.60)",
+      "candidates": ["1360"],
+      "missing": ["libSceAvcap2.sprx.prefix.bin", "SceRemotePlay eboot.bin.prefix.bin"]
+    }
+  ],
+  "ranges": [
+    {"from": "0x06020000", "to": "0x08400000", "profile": "602",
+     "notes": "audited 2026-10-26; intermediate releases reuse the observed request geometry"},
+    {"from": "0x09200000", "to": "0x09400000", "profile": "920",
+     "notes": "audited 2026-10-26"},
+    {"from": "0x10010000", "to": "0x10600000", "profile": "1001",
+     "notes": "audited 2026-10-26"},
+    {"from": "0x11400000", "to": "0x12700000", "profile": "1160",
+     "notes": "audited 2026-10-26"},
+    {"from": "0x13400000", "to": "0x13600000", "profile": "1360",
+     "notes": "13.40 Avcap2 executable LOAD segments are byte-identical to 13.60; only the native constructor was not captured"}
+  ]
+}
