@@ -85,6 +85,17 @@
       "notes": "independently extracted from the 10.60 dump; identical to 10.01"
     },
     {
+      "release": "11.20",
+      "firmware": "0x11200005",
+      "profile": "1120",
+      "status": "exact",
+      "expected": {"request_size": "0x2e0", "kind_offset": "0x1a0", "native_size_store_rva": "0x56888"},
+      "source": "fw11.20.zip",
+      "sha256": "D94908751FF11D452CCCB51BAD826A9CAC0E6AF5949C7CEA9B830EEA072F679D",
+      "evidence": "PS5 dump of fw 0x11200005 (2026-10-29): the SceRemotePlay (pid 147) and SceAvCapture (pid 60) dumps agree on the 18521-byte disk SELF (fnv64 0x7812b16df4f28ba7), and pid 147 saved a 4 MiB libSceAvcap2.sprx.prefix.bin with no missing pages",
+      "notes": "Avcap2 geometry (0x360/0x4487/0x2e0/0x1a0) is the same as 11.40, but the constructor is 0x56888 against 11.40's 0x56fc8, so it is measured instead of inherited. Exact-only: no range may stand in for another 11.20 build"
+    },
+    {
       "release": "11.40",
       "firmware": "0x11400005",
       "profile": "1140",
@@ -172,7 +183,7 @@
       "release": "11.00",
       "firmware": "0x11000000",
       "status": "unmeasured",
-      "reason": "no dump; it sits between the 10.01-10.60 and 11.40-12.70 families, which use different request sizes",
+      "reason": "no dump; it sits between the 10.01-10.60 family (0x2b8) and the measured 11.20 build (0x2e0), which use different request sizes",
       "candidates": ["1001", "1160"],
       "missing": ["libSceAvcap2.sprx.prefix.bin", "SceRemotePlay eboot.bin.prefix.bin"]
     },

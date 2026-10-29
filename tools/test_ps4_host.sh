@@ -20,6 +20,7 @@ run kernel-image tests/ps4/dump/kernel_image.c tools/dump/ps4/kernel_image.c
 run layout tests/ps4/system/layout.c payload/src/platform/ps4/system/layout.c
 python3 -m unittest discover -s tests -p test_ps4_672_layout.py
 python3 -m unittest discover -s tests -p test_embed_assets.py
+python3 -m unittest discover -s tests -p test_ps5_dump_names.py
 run layout-runtime -DPBS_PS4_DYNAMIC_LAYOUT=1 -DPBS_TEST_CONTROL -DKERNEL_IMAGE_SIZE=0x100000 tests/ps4/system/layout_runtime.c payload/src/platform/ps4/system/layout_runtime.c
 run export-reader tests/ps4/capture/export_reader.c payload/src/platform/ps4/capture/export_reader.c
 run remote-exported -DPBS_PS4 -DPBS_PS4_REMOTE_AVCAP=1 -DPBS_PS4_WORKER_BOOT=1 -DPBS_PS4_EXPORTED_READ=1 tests/ps4/capture/remote_exported.c payload/src/platform/ps4/capture/remote.c payload/src/platform/ps4/capture/export_reader.c

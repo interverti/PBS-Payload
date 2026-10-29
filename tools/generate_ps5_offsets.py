@@ -24,6 +24,29 @@ from capstone.x86 import (X86_OP_IMM, X86_OP_MEM, X86_OP_REG, X86_REG_RBX,
 MODULE = "libSceAvcap2.sprx.prefix.bin"
 EBOOT = "eboot.bin.prefix.bin"
 FW_RE = re.compile(r"ps5-([0-9a-fA-F]{8})-")
+VERSION_RE = re.compile(r"(?<!\d)(\d{1,2})[._](\d{2})(?!\d)")
+
+
+def archive_release(name: str) -> tuple[int, int] | None:
+    """Firmware the archive name promises, as (prefix, mask).
+
+    ``ps5-<id>-`` names pin the exact build; ``fw13.40.rar``-style names pin
+    major.minor only. Anything else (``dump.tar``, ``fw1140_ps5pro``) says
+    nothing and returns None.
+    """
+    exact = re.search(r"ps5-([0-9a-fA-F]{8})-", name)
+    if exact:
+        return int(exact.group(1), 16), 0xffffffff
+    version = VERSION_RE.search(name)
+    if version:
+        # "13.40" is hexadecimal in the firmware id: 0x13 major, 0x40 minor.
+        return (int(version.group(1), 16) << 24) | (int(version.group(2), 16) << 16), 0xffff0000
+    return None
+
+
+def release_label(firmware: int) -> str:
+    """0x13000040 -> '13.00', 0x11200005 -> '11.20'."""
+    return f"{firmware >> 24:02X}.{(firmware >> 16) & 0xff:02X}"
 PROLOGUE = b"\x55\x48\x89\xe5"
 ERROR = (0x81950001).to_bytes(4, "little")
 MAX_INPUT_FILES = 64
@@ -720,14 +743,26 @@ def main() -> int:
         if archive.suffix.lower() not in (".zip", ".rar", ".7z", ".tar"):
             continue
         unnamed = []
+        found: set[int] = set()
         for name, data in load_members(archive, args.seven_zip).items():
             match = FW_RE.search(name)
             if not match:
                 unnamed.append(name)
                 continue
             fw = int(match.group(1), 16)
+            found.add(fw)
             key = "avcap" if name.endswith(MODULE) else "eboot"
             gathered.setdefault(fw, {}).setdefault(key, []).append((data, archive.name + ":" + name))
+        # A dump is authoritative, but a name that promises another release is
+        # worth saying out loud: a "fw13.40" archive holding a 13.00 console is
+        # how a profile silently stays missing.
+        expected = archive_release(archive.name)
+        if expected and found:
+            prefix, mask = expected
+            wrong = sorted(fw for fw in found if fw & mask != prefix)
+            if wrong:
+                print(f"{archive.name}: name suggests {release_label(prefix)} but the dump "
+                      f"reports {', '.join(f'0x{fw:08x} ({release_label(fw)})' for fw in wrong)}")
         if unnamed:
             # A flat archive copied out of a run directory loses the firmware ID:
             # say so instead of skipping it silently.
