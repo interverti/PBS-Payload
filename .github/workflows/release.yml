@@ -177,6 +177,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # gh infers the repository from a checkout; without it the download fails
+      # with "failed to run git: fatal: not a git repository".
+      - uses: actions/checkout@v4
+
       - name: Download and verify every asset
         env:
           GH_TOKEN: ${{ github.token }}
@@ -262,6 +266,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Same reason as the checksums job: gh release needs a repository context.
+      - uses: actions/checkout@v4
+
       - name: Leave the draft state
         env:
           GH_TOKEN: ${{ github.token }}
