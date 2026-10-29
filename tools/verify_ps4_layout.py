@@ -18,7 +18,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--runner', required=True, type=Path)
     ap.add_argument('--kernel', required=True, type=Path)
-    ap.add_argument('--avcap', required=True, type=Path)
+    ap.add_argument('--avcap', type=Path,
+                    help='optional module ELF for the separate trampoline check')
     args = ap.parse_args()
     runner = str(args.runner.resolve())
     original = args.kernel.read_bytes()
@@ -51,6 +52,18 @@ def main():
             changed = bytearray(original)
             changed[at] ^= 0x40
             check(name, changed, False)
+        # Both compiler layouts must tie the two sites to the same helper,
+        # and the reconstructed bypass must land on its measured instruction.
+        helper_call = original.find(bytes.fromhex('488b7840e8'), allow, allow+128)
+        if helper_call < 0:
+            raise RuntimeError('credential helper call not found')
+        changed = bytearray(original)
+        changed[helper_call+5] ^= 1
+        check('mismatched-credential-helper', changed, False)
+        bypass = policy+5+int.from_bytes(jump[1:], 'little', signed=True)
+        changed = bytearray(original)
+        changed[bypass] ^= 1
+        check('wrong-bypass-instruction', changed, False)
         phoff = struct.unpack_from('<Q', original, 32)[0]
         stride, count = struct.unpack_from('<HH', original, 54)
         headers = [struct.unpack_from('<IIQQQQQQ', original, phoff+i*stride) for i in range(count)]
@@ -80,6 +93,9 @@ def main():
         struct.pack_into('<H', changed, 56, count+1)
         check('duplicate-executable-candidates', changed, False)
         check('truncated', original[:0x1000], False)
+        if args.avcap is None:
+            print(json.dumps({'ok': True, 'avcap_checked': False, 'checks': reports}, indent=2))
+            return
         # Map the actual module's LOAD segments and simulate resolved import
         # GOT values. Import stub/padding positions still come from the dump.
         from inspect_orbis import OrbisElf, nid

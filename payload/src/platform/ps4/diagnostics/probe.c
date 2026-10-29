@@ -15,6 +15,8 @@
 #include <unistd.h>
 #include <ps4/kernel.h>
 
+static char dump_dir[128] = "/data/pbs/ps4";
+
 static int dump_self(FILE *log, const char *path) {
   unsigned char head[32];
   int fd = open(path, O_RDONLY), result = -1;
@@ -35,8 +37,8 @@ static int dump_self(FILE *log, const char *path) {
   if (!ph || pread(fd, ph, phsize, elf_offset + eh.e_phoff) != (ssize_t)phsize) goto done;
   char dest[256];
   const char *title = strstr(path, "/NPXS");
-  if (title) snprintf(dest, sizeof dest, "/data/pbs/ps4/%.9s.elf", title + 1);
-  else snprintf(dest, sizeof dest, "/data/pbs/ps4/%s.elf", strrchr(path, '/') + 1);
+  if (title) snprintf(dest, sizeof dest, "%s/%.9s.elf", dump_dir, title + 1);
+  else snprintf(dest, sizeof dest, "%s/%s.elf", dump_dir, strrchr(path, '/') + 1);
   out = fopen(dest, "wb");
   if (!out) goto done;
   /* The reconstructed file has program headers, no section table. */
@@ -86,10 +88,20 @@ done:
 
 int main(void) {
   mkdir("/data/pbs", 0777); mkdir("/data/pbs/ps4", 0777);
-  FILE *log = fopen("/data/pbs/ps4/probe.txt", "w");
+  unsigned firmware = kernel_get_fw_version();
+#ifdef PBS_PS4_ABI_PROBE
+  snprintf(dump_dir,sizeof dump_dir,"/data/pbs/ps4/abi-%08x",firmware);
+  mkdir(dump_dir,0777);
+#endif
+  char log_path[160];
+  snprintf(log_path,sizeof log_path,"%s/probe.txt",dump_dir);
+  FILE *log = fopen(log_path, "w");
   if (!log) return 1;
   setvbuf(log, NULL, _IONBF, 0);
-  fprintf(log, "PBS PS4 discovery fw=0x%08x pid=%d\n", kernel_get_fw_version(), getpid());
+  fprintf(log, "PBS PS4 discovery fw=0x%08x pid=%d\n", firmware, getpid());
+#ifdef PBS_PS4_ABI_PROBE
+  fprintf(log,"ABI collection: files and process pathnames only; no kernel gate reads/writes, ptrace, remote calls or capture\n");
+#else
   const pbs_ps4_firmware *fw = pbs_ps4_firmware_find(kernel_get_fw_version());
   if (fw) {
     const unsigned offsets[] = {fw->acmgr_offset, fw->gates[0].offset, fw->gates[1].offset};
@@ -101,6 +113,7 @@ int main(void) {
       fprintf(log, "\n");
     }
   }
+#endif
   int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
   size_t size = 0;
   if (!sysctl(mib, 4, NULL, &size, NULL, 0)) {
@@ -125,6 +138,8 @@ int main(void) {
   }
   const char *paths[] = {
     "/system/common/lib/libSceAvcap.sprx",
+    "/system/common/lib/libkernel_sys.sprx",
+    "/system/common/lib/libSceLibcInternal.sprx",
     "/system/common/lib/libSceRemoteplay.sprx",
     "/system/priv/lib/libSceVencCore.sprx",
     "/system/priv/lib/libSceVencCoreForNeo.sprx",

@@ -291,6 +291,10 @@ int main(int argc, char **argv) {
           PBS_PS4_CAPTURE_USAGE, PBS_PS4_IMAGE_PASTE);
   const pbs_ps4_firmware *firmware = pbs_ps4_firmware_find(kernel_get_fw_version());
   if (!firmware) {
+    if ((kernel_get_fw_version() & 0xffff0000u) == 0x06720000u) {
+      fprintf(log, "PS4 6.72 capture disabled after hardware kernel panic; read-only dump only\n");
+      fprintf(stderr, "PBS: PS4 6.72 capture disabled after kernel panic; use read-only dumper\n");
+    }
     fprintf(log, "PS4 kernel layout unavailable or unsupported; no capture or kernel patches attempted\n");
     pbs_problem_record(log, PBS_PROBLEM_FATAL, "startup", 0, 0,
                        "PS4 kernel layout unavailable or unsupported (fw=%08x); "
@@ -541,6 +545,10 @@ capture_open:
    * coalescing local to PS4's own reopen path; PS5 retains its behavior. */
   if (retries && pbs_h264_take_restart_request())
     fprintf(log, "Coalesced duplicate HTTP restart received during Avcap reopen\n");
+  if (!server_ready) {
+    fprintf(log, "PBS streaming ready: %dx%d%d HTTP port=%d\n", width, height, PBS_PS4_CAPTURE_FPS, port);
+    fprintf(stderr, "PBS: PS4 streaming active %dx%d%d on HTTP port %d\n", width, height, PBS_PS4_CAPTURE_FPS, port);
+  }
   server_ready = 1;
   if (!deadline && seconds) deadline = milliseconds() + seconds * 1000ULL;
 #ifdef PBS_PS4_CAPTURE_SECONDS

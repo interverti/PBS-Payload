@@ -28,6 +28,8 @@ int main(void) {
                                  (size_t)0x281da48));
   assert(pbs_ps4_layout_available((intptr_t)0x10000000, (size_t)0x100000));
 
+  assert(!pbs_ps4_firmware_find(0x06720001u) && scans==0);
+  assert(!pbs_ps4_firmware_find(0x06728001u) && scans==0);
   assert(!pbs_ps4_firmware_find(0x12008001u) && scans==1);
   reject=0;
   /* 9.00 is the reference old firmware: no legacy table entry exists, so only
@@ -37,6 +39,7 @@ int main(void) {
   assert(pbs_ps4_firmware_find(0x09008031u)==p && scans==2);
   assert(!pbs_ps4_firmware_find(0x11008001u) && scans==2);
   assert(!pbs_ps4_firmware_find(0x12008001u) && scans==2);
+  assert(!pbs_ps4_firmware_find(0x06720001u) && scans==2);
   assert(!pbs_ps4_firmware_trap(p,0x10000940)); /* No implicit legacy fallback. */
   puts("Runtime layout cache: 9.00 accepted from code evidence, no firmware "
        "whitelist, failed discovery unpublished, legacy fallback and negative-base "

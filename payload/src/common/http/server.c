@@ -529,7 +529,15 @@ static void *client_thread(void *arg) {
     if (!media) { const char busy[] = "HTTP/1.1 503 Busy\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"; send_all(fd, busy, sizeof busy - 1); goto done; }
   }
   if (!strcmp(method, "GET") && !strcmp(path, "/")) reply(fd, "text/html; charset=utf-8", PBS_H264_HTML, sizeof PBS_H264_HTML - 1);
-  else if (!strcmp(method, "GET") && !strcmp(path, "/banner.png")) reply(fd, "image/png", PBS_BANNER_BYTES, sizeof PBS_BANNER_BYTES);
+  else if (!strcmp(method, "GET") && !strcmp(path, "/banner.png")) {
+    /* The banner is optional branding: without it the viewer drops the corner
+     * logo on its own, so answer 404 instead of an empty image. */
+    if (PBS_BANNER_LEN) reply(fd, "image/png", PBS_BANNER_BYTES, PBS_BANNER_LEN);
+    else {
+      const char missing[] = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+      send_all(fd, missing, sizeof missing - 1);
+    }
+  }
   else if (!strcmp(method, "GET") && !strcmp(path, "/config.json")) configuration(fd);
   else if (!strcmp(method, "GET") && !strcmp(path, "/status.json")) status(fd);
   else if (!strcmp(method, "GET") && !strcmp(path, "/frames")) stream(fd);

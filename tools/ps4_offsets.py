@@ -81,7 +81,11 @@ def parse_report(text):
         match = OFFSET.match(line)
         if match:
             value = match.group(2)
-            offsets[match.group(1)] = None if value == 'unresolved' else int(value, 16)
+            label = match.group(1)
+            # Older dumpers repeated labels per process. A missing export in
+            # SceAvCapture must not erase a resolved SceRemotePlay RVA.
+            if value != 'unresolved' or offsets.get(label) is None:
+                offsets[label] = None if value == 'unresolved' else int(value, 16)
     return firmware, kernel, offsets, symbols
 
 

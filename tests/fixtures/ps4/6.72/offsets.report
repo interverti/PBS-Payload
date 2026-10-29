@@ -1,0 +1,29 @@
+# PS4-DUMP v1 firmware=0x06720001
+kernel_layout=unavailable
+avcap_init=0x910
+avcap_term=0xa60
+avcap_set_static_info=0xb30
+avcap_open_video=0x10c0
+avcap_start=0x1220
+avcap_stop=0x16e0
+avcap_close=0x1710
+avcap_get_info=0x15b0
+avcap_get_static_info=0xaf0
+avcap_set_info=0x1620
+avcap_read_video=0x1490
+libc_malloc=0x58c90
+libc_free=0x58ca0
+kernel_getpid=0x7e0
+kernel_usleep=0xf520
+# avcap_init unresolved in SceAvCapture
+# avcap_term unresolved in SceAvCapture
+# avcap_set_static_info unresolved in SceAvCapture
+# avcap_open_video unresolved in SceAvCapture
+# avcap_start unresolved in SceAvCapture
+# avcap_stop unresolved in SceAvCapture
+# avcap_close unresolved in SceAvCapture
+# avcap_get_info unresolved in SceAvCapture
+# avcap_get_static_info unresolved in SceAvCapture
+# avcap_set_info unresolved in SceAvCapture
+# avcap_read_video unresolved in SceAvCapture
+# failures=1

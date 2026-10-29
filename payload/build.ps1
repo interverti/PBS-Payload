@@ -32,6 +32,8 @@ param(
   [ValidateRange(1, 3600)][int]$Ps4CaptureSeconds = 10,
   [switch]$SdkStyle,
   [switch]$TesterRelease,
+  # Branding is opt-in so a default build carries no owner logo.
+  [switch]$WebLogo,
   [switch]$Ps5NoNativeRateDefault,
   [switch]$Ps5OffsetDumpDefault,
   [switch]$Ps5DependencyDumpDefault,
@@ -84,6 +86,7 @@ if ($Platform -eq 'PS4') {
     "PBS_PS4_REMOTE_LIFECYCLE=$lifecycle", "PBS_PS4_REMOTE_IDLE_RUN=$idleRun",
     "PBS_PS4_WORKER_BOOT=$Ps4WorkerBoot",
     "PBS_PS4_CAPTURE_SECONDS=$Ps4CaptureSeconds",
+    "PBS_WEB_LOGO=$(if ($WebLogo) { 1 } else { 0 })",
     ("PBS_PS4_WORKER_PROBE=" + $(if ($env:PBS_PS4_WORKER_PROBE) { $env:PBS_PS4_WORKER_PROBE } else { "0" })))
   if ($Ps4Avcap -eq 'remote') { $buildArgs += 'PBS_PS4_REMOTE_AVCAP=1' }
   elseif ($Ps4Avcap -eq 'local') { $buildArgs += 'PBS_PS4_REMOTE_AVCAP=0' }
@@ -105,8 +108,12 @@ if ($Kind -eq 'stream') {
   $escapedViewer = $viewer.Replace('\', '\\').Replace('"', '\"').Replace("`r", '').Replace("`n", '\n')
   $viewerHeader = '#pragma once' + "`n" + 'static const char PBS_H264_HTML[] = "' + $escapedViewer + '";' + "`n"
   [System.IO.File]::WriteAllText((Join-Path $generated 'webui.h'), $viewerHeader, [System.Text.UTF8Encoding]::new($false))
-  $bannerBytes = [System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'web\banner.png'))
-  $bannerHeader = '#pragma once' + "`n" + 'static const unsigned char PBS_BANNER_BYTES[] = {' + ($bannerBytes -join ',') + '};' + "`n"
+  if ($WebLogo) {
+    $bannerBytes = [System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'web\banner.png'))
+    $bannerHeader = '#pragma once' + "`n" + 'static const unsigned char PBS_BANNER_BYTES[] = {' + ($bannerBytes -join ',') + '};' + "`n" + 'static const size_t PBS_BANNER_LEN = sizeof PBS_BANNER_BYTES;' + "`n"
+  } else {
+    $bannerHeader = '#pragma once' + "`n" + 'static const unsigned char PBS_BANNER_BYTES[] = {0};' + "`n" + 'static const size_t PBS_BANNER_LEN = 0;' + "`n"
+  }
   [System.IO.File]::WriteAllText((Join-Path $generated 'banner.h'), $bannerHeader, [System.Text.UTF8Encoding]::new($false))
 }
 

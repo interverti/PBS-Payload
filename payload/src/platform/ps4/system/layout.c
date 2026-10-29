@@ -31,6 +31,25 @@ static const unsigned char allow_pattern[] =
 static const char allow_mask[] =
   "xxx??xxxxxxxxxxxxxxxx????xxxx????xxx????xxxxxxxxx????";
 _Static_assert(sizeof allow_mask == sizeof allow_pattern, "allow signature mask");
+/* 6.72 compiler layout: request in EBX/R14D, thread in R12, target in R14.
+ * Measured from kernel-code-06720001.bin; offsets are still discovered.
+ * Do not relax the newer signature to make this older ABI match. */
+static const unsigned char allow_672[] =
+  "\x83\xfb\x2a\x77\x1d\x48\xb8\x36\x10\x00\x00\x7e\x02\x00\x00"
+  "\x4c\x0f\xa3\xf0\x0f\x83\x5e\x01\x00\x00\x45\x85\xff\x0f\x84\x75\x01\x00\x00"
+  "\x4c\x8b\xad\xa8\xfe\xff\xff\x49\x8b\x45\x08\x48\x8b\x78\x40\xe8\xc4\x3c\x12\x00";
+static const char allow_672_mask[] =
+  "xxx??xxxxxxxxxxxxxxxx????xxxxx????xxxxxxxxxxxxxxxx????";
+_Static_assert(sizeof allow_672_mask == sizeof allow_672, "6.72 allow mask");
+static const unsigned char policy_672[] =
+  "\x83\xfa\x0b\x41\xbd\x10\x00\x00\x00\x75\x15\x49\x81\xbe\x30\x04\x00\x00\xff\xff\xff\x7f\x76\x08"
+  "\x4d\x89\xf4\xe9\x32\x12\x00\x00\x48\x8b\x41\x08\x48\x8b\x78\x40\xe8\x41\x38\x12\x00"
+  "\x41\x8b\x8e\xa8\x00\x00\x00\x45\x85\xe4\x75\x68\x83\xbd\xc8\xfe\xff\xff\x0b\x75\x5f\x85\xc0\x74\x5b"
+  "\xf7\xc1\x00\x08\x00\x00\x75\x69\x4c\x89\xf7\xe8\xe8\x5b\xf3\xff\xc7\x85\xc8\xfe\xff\xff\x07\x00\x00\x00"
+  "\x45\x85\xe4\x0f\x85\x9e\x02\x00\x00";
+static const char policy_672_mask[] =
+  "xxxxxxxxxx?xxxxxxxxxxxx?xxxx????xxxxxxxxx????xxxxxxxxxxx?xxxxxxxx?xxx?xxxxxxx?xxxx????xxxxxxxxxxxxxxx????";
+_Static_assert(sizeof policy_672_mask == sizeof policy_672, "6.72 policy mask");
 static const unsigned char policy_pattern[] =
   "\x41\x83\xff\x0b\x41\xbc\x10\x00\x00\x00\x75\x0d\x49\x81\xbe\x30\x04\x00\x00\xff\xff\xff\x7f\x77\x6d"
   "\x48\x8b\x41\x08\x44\x89\xc3\x48\x8b\x78\x40\xe8\x7f\xbf\x04\x00\x41\x8b\x8e\xa8\x00\x00\x00"
@@ -104,6 +123,59 @@ static int candidate(pbs_ps4_layout_read read, void *opaque, uint64_t base,
   return 0;
 }
 
+static int candidate_672(pbs_ps4_layout_read read, void *opaque, uint64_t base,
+                        uint64_t text, size_t size, uint64_t a, pbs_ps4_firmware *out) {
+  unsigned char allow[sizeof allow_672-1],buf[0x4000],stub[16],target[14];
+  uint64_t auth,acmgr=0,policy=0,bypass=0;
+  if(!inside(a,text,size,sizeof allow) || read(opaque,a,allow,sizeof allow) ||
+     (allow[3]!=0x77 && allow[3]!=0xeb) || allow[4]!=0x1d ||
+     relative(a+54,allow+50,&auth) || !inside(auth,text,size,1))return -1;
+  size_t before=(size_t)(a-text);if(before>0x400)before=0x400;
+  if(read(opaque,a-before,buf,before))return -1;
+  static const unsigned char gs[]="\x65\x4c\x8b\x24\x25\x00\x00\x00\x00\xbf\xf8\x00\x00\x00";
+  unsigned count=0;
+  for(size_t i=0;i+5+sizeof gs-1<=before;i++) {
+    if(buf[i]!=0xe8 || memcmp(buf+i+5,gs,sizeof gs-1))continue;
+    uint64_t dest;
+    if(relative(a-before+i+5,buf+i+1,&dest) || !inside(dest,text,size,sizeof stub) ||
+       read(opaque,dest,stub,sizeof stub) || memcmp(stub,"\xb0\x01\xc3",3))return -1;
+    acmgr=dest;count++;
+  }
+  if(count!=1)return -1;
+  size_t after=size-(size_t)(a-text);if(after>sizeof buf)after=sizeof buf;
+  if(read(opaque,a,buf,after))return -1;
+  count=0;
+  for(size_t i=sizeof allow;i+sizeof policy_672-1<=after;i++) {
+    unsigned char *p=buf+i;int matches=1;
+    for(size_t j=0;j<sizeof policy_672-1;j++)
+      if((j<32 || j>=37) && policy_672_mask[j]=='x' && p[j]!=policy_672[j]){matches=0;break;}
+    if(!matches || (p[32]!=0xe9 && memcmp(p+32,policy_672+32,5)))continue;
+    uint64_t policy_auth,common;
+    if(relative(a+i+45,p+41,&policy_auth) || policy_auth!=auth ||
+       relative(a+i+105,p+101,&bypass) || !inside(bypass,text,size,sizeof target) ||
+       read(opaque,bypass,target,sizeof target) ||
+       memcmp(target,"\x8b\x85\xc8\xfe\xff\xff\x41\x89\xc7\xe9",10) ||
+       relative(bypass+14,target+10,&common) || !inside(common,text,size,1))return -1;
+    int64_t jump=(int64_t)(bypass-(a+i+32+5));
+    if(jump<INT32_MIN || jump>INT32_MAX)return -1;
+    int32_t encoded=(int32_t)jump;
+    if(p[32]==0xe9 && memcmp(p+33,&encoded,4))return -1;
+    policy=a+i+32;count++;
+  }
+  if(count!=1 || a<base || policy<base || acmgr<base ||
+     a-base>UINT_MAX-3 || policy-base>UINT_MAX || acmgr-base>UINT_MAX)return -1;
+  memset(out,0,sizeof *out);
+  out->name="PS4 6.72 compiler layout / exported Avcap ABI";
+  out->acmgr_offset=(unsigned)(acmgr-base);
+  memcpy(out->acmgr_signature,"\xb0\x01\xc3",3);
+  out->gates[0].offset=(unsigned)(a+3-base);out->gates[0].size=2;
+  memcpy(out->gates[0].before,"\x77\x1d",2);memcpy(out->gates[0].after,"\xeb\x1d",2);
+  out->gates[1].offset=(unsigned)(policy-base);out->gates[1].size=5;
+  memcpy(out->gates[1].before,policy_672+32,5);out->gates[1].after[0]=0xe9;
+  int32_t delta=(int32_t)(bypass-(policy+5));memcpy(out->gates[1].after+1,&delta,4);
+  return 0;
+}
+
 int pbs_ps4_layout_kernel(pbs_ps4_layout_read read, void *opaque,
                           uint64_t base, size_t image_size, pbs_ps4_firmware *out) {
   Elf64_Ehdr eh;
@@ -125,14 +197,17 @@ int pbs_ps4_layout_kernel(pbs_ps4_layout_read read, void *opaque,
     uint64_t off=ph[s].p_vaddr-linked;
     if (ph[s].p_vaddr<linked || off>=image_size || !ph[s].p_filesz ||
         ph[s].p_filesz>ph[s].p_memsz || ph[s].p_filesz>image_size-off) return -1;
-    unsigned char block[4096+sizeof allow_pattern];
+    unsigned char block[4096+sizeof allow_672];
     for (size_t pos=0;pos<ph[s].p_filesz;) {
       size_t count=ph[s].p_filesz-pos; if (count>sizeof block) count=sizeof block;
       if (read(opaque,base+off+pos,block,count)) return -1;
       size_t step=count>4096?4096:count;
       for (size_t i=0;i<step && i+sizeof allow_pattern-1<=count;++i) {
-        if (!match(block+i,allow_pattern,allow_mask)) continue;
-        if (candidate(read,opaque,base,base+off,(size_t)ph[s].p_filesz,base+off+pos+i,&found))
+        int older=i+sizeof allow_672-1<=count && match(block+i,allow_672,allow_672_mask);
+        if (!older && !match(block+i,allow_pattern,allow_mask)) continue;
+        int rc=older ? candidate_672(read,opaque,base,base+off,(size_t)ph[s].p_filesz,base+off+pos+i,&found)
+                     : candidate(read,opaque,base,base+off,(size_t)ph[s].p_filesz,base+off+pos+i,&found);
+        if (rc)
           return -1;
         if (++matches>1) return -1;
       }

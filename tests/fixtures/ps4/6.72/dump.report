@@ -1,0 +1,45 @@
+PS4-DUMP v1 firmware=0x06720001 kernel_base=0xffffffff93ae0000 image_size=0x283abf8
+kernel probe base=0xffffffff93ae0000 image=0x283abf8 read=0 magic=7f454c4602010109
+kernel layout status=unavailable firmware=0x06720001
+kernel code segment=2 offset=0x0 size=0xd1d728 status=complete
+kernel code status=saved path=/data/pbs/ps4/kernel-code-06720001.bin format=memory-layout-executable-only
+process name=SceRemotePlay pid=47
+module process=SceRemotePlay name=libSceAvcap.sprx handle=126 base=0x80038c000 size=0x414000 entry=0x80038c000
+symbol process=SceRemotePlay module=libSceAvcap.sprx label=avcap_init address=0x80038c910 rva=0x910
+symbol process=SceRemotePlay module=libSceAvcap.sprx label=avcap_term address=0x80038ca60 rva=0xa60
+symbol process=SceRemotePlay module=libSceAvcap.sprx label=avcap_set_static_info address=0x80038cb30 rva=0xb30
+symbol process=SceRemotePlay module=libSceAvcap.sprx label=avcap_open_video address=0x80038d0c0 rva=0x10c0
+symbol process=SceRemotePlay module=libSceAvcap.sprx label=avcap_start address=0x80038d220 rva=0x1220
+symbol process=SceRemotePlay module=libSceAvcap.sprx label=avcap_stop address=0x80038d6e0 rva=0x16e0
+symbol process=SceRemotePlay module=libSceAvcap.sprx label=avcap_close address=0x80038d710 rva=0x1710
+symbol process=SceRemotePlay module=libSceAvcap.sprx label=avcap_get_info address=0x80038d5b0 rva=0x15b0
+symbol process=SceRemotePlay module=libSceAvcap.sprx label=avcap_get_static_info address=0x80038caf0 rva=0xaf0
+symbol process=SceRemotePlay module=libSceAvcap.sprx label=avcap_set_info address=0x80038d620 rva=0x1620
+symbol process=SceRemotePlay module=libSceAvcap.sprx label=avcap_read_video address=0x80038d490 rva=0x1490
+module process=SceRemotePlay name=libSceLibcInternal.sprx handle=2 base=0x833534000 size=0x414000 entry=0x833534000
+symbol process=SceRemotePlay module=libSceLibcInternal.sprx label=libc_malloc address=0x83358cc90 rva=0x58c90
+symbol process=SceRemotePlay module=libSceLibcInternal.sprx label=libc_free address=0x83358cca0 rva=0x58ca0
+module process=SceRemotePlay name=libkernel_sys.sprx handle=8193 base=0x8084e0000 size=0x438000 entry=0x8085099e4
+symbol process=SceRemotePlay module=libkernel_sys.sprx label=kernel_getpid address=0x8084e07e0 rva=0x7e0
+symbol process=SceRemotePlay module=libkernel_sys.sprx label=kernel_usleep address=0x8084ef520 rva=0xf520
+process name=SceAvCapture pid=43
+module process=SceAvCapture name=libSceAvcap.sprx status=unavailable
+symbol process=SceAvCapture module=libSceAvcap.sprx label=avcap_init address=0x0 rva=unresolved
+symbol process=SceAvCapture module=libSceAvcap.sprx label=avcap_term address=0x0 rva=unresolved
+symbol process=SceAvCapture module=libSceAvcap.sprx label=avcap_set_static_info address=0x0 rva=unresolved
+symbol process=SceAvCapture module=libSceAvcap.sprx label=avcap_open_video address=0x0 rva=unresolved
+symbol process=SceAvCapture module=libSceAvcap.sprx label=avcap_start address=0x0 rva=unresolved
+symbol process=SceAvCapture module=libSceAvcap.sprx label=avcap_stop address=0x0 rva=unresolved
+symbol process=SceAvCapture module=libSceAvcap.sprx label=avcap_close address=0x0 rva=unresolved
+symbol process=SceAvCapture module=libSceAvcap.sprx label=avcap_get_info address=0x0 rva=unresolved
+symbol process=SceAvCapture module=libSceAvcap.sprx label=avcap_get_static_info address=0x0 rva=unresolved
+symbol process=SceAvCapture module=libSceAvcap.sprx label=avcap_set_info address=0x0 rva=unresolved
+symbol process=SceAvCapture module=libSceAvcap.sprx label=avcap_read_video address=0x0 rva=unresolved
+module process=SceAvCapture name=libSceLibcInternal.sprx handle=2 base=0x831af0000 size=0x414000 entry=0x831af0000
+symbol process=SceAvCapture module=libSceLibcInternal.sprx label=libc_malloc address=0x831b48c90 rva=0x58c90
+symbol process=SceAvCapture module=libSceLibcInternal.sprx label=libc_free address=0x831b48ca0 rva=0x58ca0
+module process=SceAvCapture name=libkernel_sys.sprx handle=8193 base=0x83527c000 size=0x438000 entry=0x8352a59e4
+symbol process=SceAvCapture module=libkernel_sys.sprx label=kernel_getpid address=0x83527c7e0 rva=0x7e0
+symbol process=SceAvCapture module=libkernel_sys.sprx label=kernel_usleep address=0x83528b520 rva=0xf520
+symbols resolved=15 missing=0
+PS4-DUMP finished failures=1

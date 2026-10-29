@@ -57,7 +57,7 @@ class TableTest(unittest.TestCase):
 
     def test_schema_and_validation(self):
         self.assertEqual(self.data['platform'], 'ps4')
-        self.assertEqual(sorted(self.firmwares), ['11.00', '9.00'])
+        self.assertEqual(sorted(self.firmwares), ['11.00', '6.72', '9.00'])
         table.validate(self.data, self.firmwares)
 
     def test_900_kernel_values(self):
@@ -66,6 +66,43 @@ class TableTest(unittest.TestCase):
         self.assertEqual([gate['offset'] for gate in kernel['gates']],
                          ['0x41f4e5', '0x41f9d1'])
         self.assertIsNone(kernel['acmgr_signature'])
+
+    def test_672_measured_kernel_and_exports_do_not_inherit_trap(self):
+        entry = self.firmwares['6.72']
+        self.assertEqual(entry['version'], '0x06720001')
+        self.assertEqual(entry['version_mask'], '0xffffffff')
+        self.assertEqual(entry['kernel']['acmgr_offset'], '0x233bd0')
+        self.assertEqual([gate['offset'] for gate in entry['kernel']['gates']],
+                         ['0x10f879', '0x10fd22'])
+        self.assertEqual(entry['kernel']['gates'][1]['after'], [233,226,2,0,0])
+        self.assertIsNone(entry['avcap']['trap'])
+        self.assertEqual(entry['avcap']['exports']['init'], '0x910')
+        self.assertEqual(entry['avcap']['exports']['read_video'], '0x1490')
+        self.assertEqual(entry['libraries']['libc_malloc']['rva'], '0x58c90')
+
+    def test_supplied_report_fixtures(self):
+        for release in ('6.72', '9.00'):
+            path = ROOT / 'tests' / 'fixtures' / 'ps4' / release / 'dump.report'
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                failures = table.report_check(self.data, self.firmwares, path, release)
+            self.assertEqual(failures, 0, output.getvalue())
+
+    def test_unknown_kernel_gate_cannot_carry_patch_bytes(self):
+        data = json.loads(json.dumps(self.data))
+        entries = {entry['release']: entry for entry in data['firmwares']}
+        entries['6.72']['kernel']['gates'][0]['offset'] = None
+        entries['6.72']['kernel']['gates'][0].update(
+            size=2, before=[0x77,0x1c], after=[0xeb,0x1c])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            table.validate(data, entries)
+
+    def test_compact_report_fixtures_retain_every_measured_export(self):
+        from ps4_offsets import parse_report
+        for release in ('6.72', '9.00'):
+            path = ROOT / 'tests' / 'fixtures' / 'ps4' / release / 'offsets.report'
+            _, _, parsed, _ = parse_report(path.read_text(encoding='utf-8'))
+            for label, value in self.firmwares[release]['avcap']['exports'].items():
+                self.assertEqual(parsed['avcap_' + label], int(value,16))
 
     def test_900_avcap_values(self):
         avcap = self.firmwares['9.00']['avcap']
@@ -189,7 +226,7 @@ class CommandLineTest(unittest.TestCase):
     def test_check_succeeds(self):
         done = self.run_tool('--check')
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn('2 firmware(s) valid', done.stdout)
+        self.assertIn('3 firmware(s) valid', done.stdout)
 
     def test_compare_shows_differences(self):
         done = self.run_tool('--compare', '9.00', '11.00')

@@ -9,11 +9,17 @@ case "$config" in
   Debug) optimization=-O0; debug_flags=(-g) ;;
   *) echo 'PBS_BUILD_CONFIG must be Debug or Release' >&2; exit 2 ;;
 esac
+# The owner's banner is branding, not code: opt in, otherwise it is not
+# embedded and /banner.png answers 404 (no logo in the viewer).
+web_logo=${PBS_WEB_LOGO:-0}
+if [[ $web_logo != 0 && $web_logo != 1 ]]; then
+  echo 'PBS_WEB_LOGO must be 0 or 1 (1 embeds web/banner.png, default 0)' >&2; exit 2
+fi
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 case "$platform" in
   ps4) sdk=${PS4_PAYLOAD_SDK:?Set PS4_PAYLOAD_SDK}; compiler="$sdk/bin/orbis-clang" ;;
   ps5) sdk=${PS5_PAYLOAD_SDK:?Set PS5_PAYLOAD_SDK}; compiler="$sdk/bin/prospero-clang" ;;
-  *) echo 'Usage: build.sh ps4|ps5 [stream|smoke|probe|dump]' >&2; exit 2 ;;
+  *) echo 'Usage: build.sh ps4|ps5 [stream|smoke|probe|abi-probe|dump]' >&2; exit 2 ;;
 esac
 includes=(-I"$root/src" -I"$root/build/generated")
 out="$root/build/$platform"
@@ -31,6 +37,9 @@ if [[ $kind == worker-probe && $platform == ps4 ]]; then
   python3 "$root/../tools/verify_ps4_worker_blob.py" "$out/pbs-worker-probe.elf"
 elif [[ $kind == probe && $platform == ps4 ]]; then
   "$compiler" "${includes[@]}" -O2 "${debug_flags[@]}" -Wall -Wextra -Werror "$root/src/platform/ps4/diagnostics/probe.c" -o "$out/pbs-probe.elf"
+elif [[ $kind == abi-probe && $platform == ps4 ]]; then
+  "$compiler" "${includes[@]}" -O2 "${debug_flags[@]}" -Wall -Wextra -Werror -DPBS_PS4_ABI_PROBE=1 \
+    "$root/src/platform/ps4/diagnostics/probe.c" -o "$out/pbs-abi-probe.elf"
 elif [[ $kind == dump && $platform == ps4 ]]; then
   # Read-only offset report. No capture, no patch, no module image here: run
   # the probe payload for the module ELFs and tools/ps4_offsets.py offline.
@@ -38,9 +47,11 @@ elif [[ $kind == dump && $platform == ps4 ]]; then
   # measurement tool, not part of the capture payload.
   "$compiler" "${includes[@]}" -I"$root/../tools" -O2 "${debug_flags[@]}" -Wall -Wextra -Werror \
     "$root/../tools/dump/ps4/dump_main.c" "$root/../tools/dump/ps4/offset_report.c" \
+    "$root/../tools/dump/ps4/kernel_image.c" \
     "$root/src/platform/ps4/system/layout.c" -o "$out/pbs-dump.elf"
 elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
-  python3 "$root/embed_assets.py"
+  if [[ $web_logo == 1 ]]; then python3 "$root/embed_assets.py" --logo
+  else python3 "$root/embed_assets.py"; fi
   if [[ $platform == ps4 ]]; then
     capture_height=${PBS_PS4_CAPTURE_HEIGHT:-720}
     if [[ $capture_height != 720 && $capture_height != 1080 ]]; then

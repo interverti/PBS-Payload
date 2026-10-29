@@ -153,14 +153,14 @@ def validate(data, firmwares):
             if isinstance(value, str):
                 as_hex(value, '%s %s' % (where, path))
         gates = (entry.get('kernel') or {}).get('gates') or []
-        if not gates:
-            errors.append('%s: no kernel gates' % where)
+        if len(gates) != 2:
+            errors.append('%s: expected two kernel gates (null offsets when unmeasured)' % where)
         for index, gate in enumerate(gates):
             as_hex(gate.get('offset'), '%s gate %d offset' % (where, index))
-            if gate.get('offset') is None:
-                errors.append('%s: gate %d has no offset' % (where, index))
             size = gate.get('size')
             before, after = gate.get('before'), gate.get('after')
+            if gate.get('offset') is None and any(value is not None for value in (size, before, after)):
+                errors.append('%s: gate %d has bytes without a measured offset' % (where, index))
             if size is None and before is None and after is None:
                 continue
             if not isinstance(size, int) or not 1 <= size <= 5:

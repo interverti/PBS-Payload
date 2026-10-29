@@ -4,6 +4,58 @@
   "note": "Per-firmware PS4 offsets. Values are RVAs relative to the module or kernel image base; null means not measured on that firmware, never zero. Kernel offsets, avcap internals and library exports are all firmware-specific: never reuse them across releases. Sources are listed per firmware and can be re-checked with tools/ps4_firmware_table.py --report.",
   "firmwares": [
     {
+      "release": "6.72",
+      "version": "0x06720001",
+      "version_mask": "0xffffffff",
+      "evidence": [
+        "PS4-DUMP v1 report on fw 0x06720001, supplied in ps4-dumps-pbs/6.72 on 2026-10-28",
+        "Report replay fixtures: tests/fixtures/ps4/6.72/dump.report and offsets.report",
+        "kernel probe read=0 magic=7f454c4602010109; original runtime kernel layout unavailable",
+        "kernel-code-06720001.bin: 0xd1d728 bytes, SHA256 641af6897843db631c76532bbca8963b2ecd11534bfeb1350cae434ea22a0718",
+        "Offline dedicated compiler-layout scanner: acmgr=233bd0 allow=10f879 policy=10fd22 jump=e9e2020000; original/armed/relocated accepted, altered/duplicate/truncated refused"
+      ],
+      "kernel": {
+        "acmgr_offset": "0x233bd0",
+        "acmgr_signature": [176, 1, 195],
+        "gates": [
+          { "offset": "0x10f879", "before": [119,29], "after": [235,29], "size": 2 },
+          { "offset": "0x10fd22", "before": [72,139,65,8,72], "after": [233,226,2,0,0], "size": 5 }
+        ]
+      },
+      "avcap": {
+        "module": "libSceAvcap.sprx",
+        "module_size": "0x414000",
+        "init": "0x910",
+        "trap": null,
+        "ready_delta": null,
+        "dequeue_delta": null,
+        "consume_delta": null,
+        "ring_state_offset": null,
+        "exports": {
+          "init": "0x910", "term": "0xa60",
+          "set_static_info": "0xb30", "get_static_info": "0xaf0",
+          "open_video": "0x10c0", "start": "0x1220",
+          "get_info": "0x15b0", "set_info": "0x1620",
+          "stop": "0x16e0", "close": "0x1710", "read_video": "0x1490"
+        }
+      },
+      "libraries": {
+        "libc_malloc": { "module": "libSceLibcInternal.sprx", "rva": "0x58c90" },
+        "libc_free": { "module": "libSceLibcInternal.sprx", "rva": "0x58ca0" },
+        "kernel_getpid": { "module": "libkernel_sys.sprx", "rva": "0x7e0" },
+        "kernel_usleep": { "module": "libkernel_sys.sprx", "rva": "0xf520" }
+      },
+      "remoteplay": {
+        "nn_socket": null, "vtable": null, "data": null,
+        "data_size": null, "ensure_open": null
+      },
+      "capture": {
+        "flags": null, "slots": null, "object_head": null,
+        "profile2_vtable": null, "check": null, "caps": null, "latch_site": null
+      },
+      "notes": "CAPTURE DISABLED: the user reported a kernel panic on hardware after the dedicated build. Signature recognition passed offline but does not establish safe capture/injection behavior. Kernel gates and exports remain measured evidence for read-only analysis; runtime firmware selection explicitly refuses every 6.72 build before scanning, kernel patches or process attachment. The read-only dumper stays available. No trap slot or private Avcap ABI is inherited from 9.00/11.00. module_size is the SDK-reported span, not independently validated ELF geometry."
+    },
+    {
       "release": "9.00",
       "version": "0x09008031",
       "version_mask": "0xffff0000",

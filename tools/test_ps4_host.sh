@@ -16,7 +16,10 @@ run() {
 run firmware tests/ps4/system/firmware.c
 run problem-log tests/common/problem_log.c payload/src/common/diagnostics/problem_log.c
 run offset-report tests/ps4/dump/offset_report.c tools/dump/ps4/offset_report.c
+run kernel-image tests/ps4/dump/kernel_image.c tools/dump/ps4/kernel_image.c
 run layout tests/ps4/system/layout.c payload/src/platform/ps4/system/layout.c
+python3 -m unittest discover -s tests -p test_ps4_672_layout.py
+python3 -m unittest discover -s tests -p test_embed_assets.py
 run layout-runtime -DPBS_PS4_DYNAMIC_LAYOUT=1 -DPBS_TEST_CONTROL -DKERNEL_IMAGE_SIZE=0x100000 tests/ps4/system/layout_runtime.c payload/src/platform/ps4/system/layout_runtime.c
 run export-reader tests/ps4/capture/export_reader.c payload/src/platform/ps4/capture/export_reader.c
 run remote-exported -DPBS_PS4 -DPBS_PS4_REMOTE_AVCAP=1 -DPBS_PS4_WORKER_BOOT=1 -DPBS_PS4_EXPORTED_READ=1 tests/ps4/capture/remote_exported.c payload/src/platform/ps4/capture/remote.c payload/src/platform/ps4/capture/export_reader.c
@@ -72,6 +75,7 @@ python3 payload/embed_assets.py
 run http-shutdown -pthread tests/http/shutdown.c payload/src/common/http/server.c
 run http-frame-rate -pthread tests/http/frame_rate.c payload/src/common/http/server.c
 run http-port-scan -pthread tests/http/port_scan.c payload/src/common/http/server.c
+run http-banner -pthread tests/http/banner.c payload/src/common/http/server.c
 run http-keyframe-refresh -pthread -Wl,--wrap=clock_gettime tests/http/keyframe_refresh.c payload/src/common/http/server.c
 run http-stream-jitter -pthread -Wl,--wrap=send -Wl,--wrap=sendto tests/http/stream_jitter.c payload/src/common/http/server.c
 "$out/http-stream-jitter" --rtp

@@ -89,6 +89,12 @@ class ReportTest(unittest.TestCase):
         firmware, _, _, _ = offsets.parse_report('nothing useful\n')
         self.assertIsNone(firmware)
 
+    def test_missing_process_export_does_not_erase_resolved_rva(self):
+        for lines in ('avcap_init=0x940\navcap_init=unresolved',
+                      'avcap_init=unresolved\navcap_init=0x940'):
+            _, _, parsed, _ = offsets.parse_report(OFFSETS + '\n' + lines)
+            self.assertEqual(parsed['avcap_init'], 0x940)
+
 
 class PaddingRunTest(unittest.TestCase):
     def test_twenty_slots_detected(self):

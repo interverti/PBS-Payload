@@ -7,11 +7,14 @@
  *     ptrace/policy gates), plus a paste-ready initializer;
  *   - the module-relative address of every export the capture path resolves,
  *     per process, so avcap_init_offset and friends come from the console.
+ * If the kernel is readable but discovery fails, also saves ELF headers and
+ * executable LOADs to kernel-code-<firmware>.bin for offline signature work.
  * It never patches, never attaches, never opens a capture session and never
  * reads a module image: tools/ps4_offsets.py derives the remaining values
  * offline from the module ELFs dumped by the `probe` payload.
  */
 #include "dump/ps4/offset_report.h"
+#include "dump/ps4/kernel_image.h"
 #include "platform/ps4/system/layout.h"
 #include <ps4/kernel.h>
 #include <errno.h>
@@ -133,7 +136,7 @@ static unsigned dump_process(FILE *report, FILE *offsets, const char *name,
   fprintf(report, "process name=%s pid=%d\n", name, (int)pid);
   if (pid <= 0) {
     fprintf(report, "process name=%s status=unavailable\n", name);
-    return 1;
+    return 0; /* Missing exports are counted once, after both processes. */
   }
   size_t catalog_count = 0;
   const pbs_ps4_dump_symbol *catalog = pbs_ps4_dump_symbols(&catalog_count);
@@ -158,7 +161,6 @@ static unsigned dump_process(FILE *report, FILE *offsets, const char *name,
                                   entry->module, address, rva));
     if (i < seen_count) {
       if (rva < 0) {
-        ++failures;
         /* An unresolved export must never erase a value measured elsewhere. */
         fprintf(offsets, "# %s unresolved in %s\n", entry->label, name);
       } else if (seen[i] < 0) {
@@ -171,8 +173,6 @@ static unsigned dump_process(FILE *report, FILE *offsets, const char *name,
         fprintf(offsets, "# %s differs in %s: 0x%llx (first 0x%llx)\n",
                 entry->label, name, rva, seen[i]);
       }
-    } else if (rva < 0) {
-      ++failures;
     }
   }
   return failures;
@@ -204,6 +204,19 @@ static unsigned dump_kernel(FILE *report, FILE *offsets, unsigned firmware) {
        pbs_ps4_dump_kernel_line(line, sizeof line, found, firmware));
   if (!found) {
     fprintf(offsets, "kernel_layout=unavailable\n");
+    if (available && !probe) {
+      char path[160], partial[168];
+      snprintf(path,sizeof path,PBS_PS4_DUMP_DIR "/kernel-code-%08x.bin",firmware);
+      snprintf(partial,sizeof partial,"%s.part",path);
+      FILE *image=fopen(partial,"wb");
+      int saved=image ? pbs_ps4_dump_kernel_code(read_kernel,NULL,(uint64_t)base,
+                                    KERNEL_IMAGE_SIZE,image,report) : -1;
+      if(image && fclose(image))saved=-1;
+      if(!saved && rename(partial,path))saved=-1;
+      if(saved)unlink(partial);
+      fprintf(report,"kernel code status=%s path=%s format=memory-layout-executable-only\n",
+              saved?"failed":"saved",path);
+    }
     return 1;
   }
   pbs_ps4_dump_offset_line(line, sizeof line, "acmgr_offset",
@@ -249,6 +262,10 @@ int main(void) {
   for (size_t i = 0; i < catalog_count; ++i) seen[i] = -1;
   failures += dump_process(report, offsets, "SceRemotePlay", seen, catalog_count);
   failures += dump_process(report, offsets, "SceAvCapture", seen, catalog_count);
+  unsigned missing=0;
+  for(size_t i=0;i<catalog_count;i++)if(seen[i]<0)missing++;
+  failures+=missing;
+  fprintf(report,"symbols resolved=%zu missing=%u\n",catalog_count-missing,missing);
   fprintf(report, "PS4-DUMP finished failures=%u\n", failures);
   fprintf(offsets, "# failures=%u\n", failures);
   int report_ok = fclose(report);
