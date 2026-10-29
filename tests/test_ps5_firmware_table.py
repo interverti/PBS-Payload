@@ -82,11 +82,12 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(profile["avcap2"]["kind_offset"], kind, release)
             self.assertEqual(int(row["expected"]["request_size"], 16), request, release)
 
-    def test_400_stays_behind_its_experimental_define(self):
-        self.assertIn(0x04000042, self.registry["experimental"])
+    def test_400_is_measured_and_ungated(self):
+        self.assertNotIn(0x04000042, self.registry["experimental"])
         row = next(item for item in self.table["firmwares"] if item["release"] == "4.00")
-        self.assertTrue(row["experimental"])
-        self.assertTrue(self.profiles["400"]["experimental"])
+        self.assertEqual(row["status"], "exact")
+        self.assertNotIn("experimental", row)
+        self.assertFalse(self.profiles["400"]["experimental"])
 
     def test_ranges_match_the_generator_and_the_compiled_switch(self):
         compiled = [(low, high, name) for low, high, name in self.registry["ranges"]]

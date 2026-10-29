@@ -107,17 +107,15 @@ if grep -rnE 'KERNEL_ADDRESS_IMAGE_BASE[[:space:]]*[<>]' payload/src; then
   exit 1
 fi
 # 13.20 has a measured profile: the temporary experimental gate must never come
-# back, in the payload, the build plumbing or CI.
-if grep -rn --exclude=test_ps4_host.sh 'PBS_PS5_EXPERIMENTAL_FW1320' payload .github tools; then
-  printf '13.20 is measured; remove the experimental gate and its build switch.\n' >&2
+# back, in the payload, the build plumbing or CI. 4.00 followed the same path on
+# 2026-10-29, after its dump was re-checked instruction by instruction.
+if grep -rn --exclude=test_ps4_host.sh -E 'PBS_PS5_EXPERIMENTAL_FW(1320|400)' payload .github tools; then
+  printf '13.20 and 4.00 are measured; remove the experimental gate and its build switch.\n' >&2
   exit 1
 fi
 # The selector is the only place where a gated profile can leak into a build:
-# compile it in every configuration and run the selection checks.
-for define in '' '-DPBS_PS5_EXPERIMENTAL_FW400'; do
-  # shellcheck disable=SC2086
-  "$cc" "${flags[@]}" $define -Ipayload/src tests/ps5/offset_ranges.c \
-    payload/src/platform/ps5/offset/*.c -o "$out/ps5-offset-ranges"
-  "$out/ps5-offset-ranges"
-done
+# compile it and run the selection checks.
+"$cc" "${flags[@]}" -Ipayload/src tests/ps5/offset_ranges.c \
+  payload/src/platform/ps5/offset/*.c -o "$out/ps5-offset-ranges"
+"$out/ps5-offset-ranges"
 printf 'Offline regression passed (PS4 payload + PS5 firmware ledger + selector matrix). No console connection made.\n'

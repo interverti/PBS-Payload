@@ -47,13 +47,10 @@ jobs:
       - name: PS5 selector matrix
         run: |
           mkdir -p build
-          for define in '' '-DPBS_PS5_EXPERIMENTAL_FW400'; do
-            # shellcheck disable=SC2086
-            cc -std=c11 -Wall -Wextra -Werror $define -Ipayload/src \
-              tests/ps5/offset_ranges.c payload/src/platform/ps5/offset/*.c \
-              -o build/offset_ranges
-            ./build/offset_ranges
-          done
+          cc -std=c11 -Wall -Wextra -Werror -Ipayload/src \
+            tests/ps5/offset_ranges.c payload/src/platform/ps5/offset/*.c \
+            -o build/offset_ranges
+          ./build/offset_ranges
 
   payload:
     name: ${{ matrix.platform }} payload build

@@ -1,5 +1,7 @@
 """Regressions for the PS5 firmware dump parser and safe profile generation."""
 
+import contextlib
+import io
 import os
 import shutil
 import subprocess
@@ -110,52 +112,46 @@ class GenerateOffsetsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "invalid length"):
                 offsets.load_members(zipped, "7z")
 
-    def test_unverified_400_registry_requires_explicit_opt_in(self):
+    def test_measured_400_renders_ungated(self):
+        """4.00 was promoted on 2026-10-29: its profile is selected, not opted in."""
+        result = offsets.read_profile_fields(PROFILES / "400.c")
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            dumps, out = root / "dumps", root / "out"
-            dumps.mkdir()
-            out.mkdir()
-            result = dict(open_video=0x33f, ipc_command=0x3ac4,
-                          size=0x230, kind=0x100, constructor=0x1b7f12,
-                          rate_group=0x90, rate_group_size=0x68,
-                          rate_descriptor_size=0x20,
-                          image_group=0x148, image_group_size=0xe8,
-                          image_descriptor_size=0x40,
-                          width=0x168, height=0x16c, image_paste=0x190,
-                          video_mode=0x218, mask_mode=0x21c, mask_span=0x14)
+            out = Path(tmp)
             (out / "400.c").write_text(offsets.render_profile(0x04000042, result),
                                        encoding="utf-8")
-            subprocess.run([sys.executable, str(TOOLS / "generate_ps5_offsets.py"),
-                            str(dumps), "--out", str(out)], check=True,
-                           capture_output=True, text=True)
+            offsets.write_registry(out, {0x04000042: out / "400.c"})
             registry = (out / "registry.c").read_text(encoding="utf-8")
-            self.assertIn("#ifdef PBS_PS5_EXPERIMENTAL_FW400", registry)
-            self.assertIn("case 0x04000042u:", registry)
-            self.assertIn("#endif", registry)
+            self.assertIn("    case 0x04000042u: return &pbs_ps5_offsets_400;", registry)
+            self.assertNotIn("#ifdef PBS_PS5_EXPERIMENTAL_FW400", registry)
+            self.assertNotIn("EXPERIMENTAL", (out / "400.c").read_text(encoding="utf-8"))
 
     def test_inferred_profile_is_gated_and_copied_from_its_source(self):
-        """The inferred path still exists; 4.00 is the only gated target left."""
+        """--infer still renders a gated hypothesis; no shipped profile needs one today."""
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
             out.mkdir()
             shutil.copy(PROFILES / "602.c", out / "602.c")
-            command = [sys.executable, str(TOOLS / "generate_ps5_offsets.py"),
-                       "--infer", "0x04000042=602", "--out", str(out)]
-            result = subprocess.run(command, check=True, capture_output=True, text=True)
-            self.assertIn("inferred from 602.c", result.stdout)
-            profile = (out / "400.c").read_text(encoding="utf-8")
-            self.assertIn(".firmware = 0x04000042u,", profile)
-            self.assertIn(".request_size = 0x2a8u,", profile)
-            self.assertIn("EXPERIMENTAL", profile)
-            self.assertIn("PBS_PS5_EXPERIMENTAL_FW400", profile)
-            registry = (out / "registry.c").read_text(encoding="utf-8")
-            self.assertIn("#ifdef PBS_PS5_EXPERIMENTAL_FW400\n"
-                          "    case 0x04000042u: return &pbs_ps5_offsets_400;\n#endif",
-                          registry)
-            # Re-running must not rewrite anything.
-            again = subprocess.run(command, check=True, capture_output=True, text=True)
-            self.assertNotIn("updated registry.c", again.stdout)
+            original = offsets.GATED_PROFILES
+            offsets.GATED_PROFILES = {0x0AB00000: "test hypothesis"}
+            try:
+                with contextlib.redirect_stdout(io.StringIO()) as first:
+                    offsets.infer_profiles(out, ["0x0ab00000=602"])
+                self.assertIn("inferred from 602.c", first.getvalue())
+                profile = (out / "ab0.c").read_text(encoding="utf-8")
+                self.assertIn(".firmware = 0x0ab00000u,", profile)
+                self.assertIn(".request_size = 0x2a8u,", profile)
+                self.assertIn("EXPERIMENTAL", profile)
+                self.assertIn("PBS_PS5_EXPERIMENTAL_FWAB0", profile)
+                registry = (out / "registry.c").read_text(encoding="utf-8")
+                self.assertIn("#ifdef PBS_PS5_EXPERIMENTAL_FWAB0\n"
+                              "    case 0x0ab00000u: return &pbs_ps5_offsets_ab0;\n#endif",
+                              registry)
+                # Re-running must not rewrite anything.
+                with contextlib.redirect_stdout(io.StringIO()) as again:
+                    offsets.infer_profiles(out, ["0x0ab00000=602"])
+                self.assertNotIn("updated registry.c", again.getvalue())
+            finally:
+                offsets.GATED_PROFILES = original
 
     def test_measured_1320_profile_is_exact_and_ungated(self):
         profile = (PROFILES / "1320.c").read_text(encoding="utf-8")
@@ -191,7 +187,7 @@ class GenerateOffsetsTests(unittest.TestCase):
                                check=True, capture_output=True, text=True)
             self.assertIn("only gated profiles can be inferred", caught.exception.stderr)
 
-    def test_historical_400_comment_matches_the_rendered_profile(self):
+    def test_measured_400_matches_the_rendered_profile(self):
         result = offsets.read_profile_fields(PROFILES / "400.c")
         rendered = offsets.render_profile(0x04000042, result)
         self.assertEqual(rendered, (PROFILES / "400.c").read_text(encoding="utf-8"))

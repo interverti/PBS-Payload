@@ -529,10 +529,10 @@ def fw_name(fw: int) -> str:
 
 # Profiles that ship compiled but are never selected by default: the dump behind
 # them is incomplete. Each one is gated by its own define so a console can test it
-# explicitly.
-GATED_PROFILES = {
-    0x04000042: "firmware 4.00 dump has a one-byte RIP/rodata mismatch",
-}
+# explicitly. Empty today: 4.00 was promoted to a measured profile after its dump
+# was re-checked instruction by instruction (2026-10-29). Record a hypothesis here
+# before running --infer, never after.
+GATED_PROFILES: dict[int, str] = {}
 
 
 def gate_define(fw: int) -> str:
@@ -642,8 +642,12 @@ def read_profile_fields(path: Path) -> dict:
 
 
 def write_registry(directory: Path, known: dict[int, Path]) -> None:
-    """Render registry.c from the profiles on disk, gating inferred entries."""
+    """Render registry.c from the profiles on disk, gating the EXPERIMENTAL ones."""
     firmware_ids = sorted(known)
+    # The marker lives in the profile itself, so a hand-written or inferred file is
+    # gated by what it says, not by a second list that can drift from it.
+    gated = {fw for fw, path in known.items()
+             if "EXPERIMENTAL" in path.read_text(encoding="utf-8")}
     symbols = [f"pbs_ps5_offsets_{fw_name(fw)}" for fw in firmware_ids]
     registry = ['// SPDX-License-Identifier: GPL-3.0-or-later',
                 '#include "platform/ps5/offset/profile.h"', ""]
@@ -652,7 +656,7 @@ def write_registry(directory: Path, known: dict[int, Path]) -> None:
                  "  switch (firmware) {"]
     for fw in firmware_ids:
         case = f"    case 0x{fw:08x}u: return &pbs_ps5_offsets_{fw_name(fw)};"
-        if fw in GATED_PROFILES:
+        if fw in gated:
             # An inferred or unverified profile must never be selected by default.
             registry += [f"#ifdef {gate_define(fw)}", case, "#endif"]
         else:
@@ -798,8 +802,6 @@ def main() -> int:
             continue
         native, native_source = natives[0]
         profiles[fw] = (abi | native, avcap_source + " | " + native_source)
-        if fw == 0x04000042:
-            print("04000042: EXPERIMENTAL - one-byte RIP/rodata mismatch in source dump")
         print(f"{fw:08x}: size=0x{abi['size']:x} kind=0x{abi['kind']:x} "
               f"constructor=0x{native['constructor']:x}")
     if args.reference_940 and 0x09200005 not in profiles:

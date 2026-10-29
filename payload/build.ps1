@@ -39,7 +39,6 @@ param(
   [switch]$Ps5DependencyDumpDefault,
   [switch]$Ps5ModuleFileDumpDefault,
   [switch]$Ps5DiagnosticOpenOnly,
-  [switch]$Ps5ExperimentalFw400,
   [ValidateSet('2160p', '1440p', '1080p', '720p')][string]$Ps5DefaultResolution = '1440p'
 )
 
@@ -169,7 +168,6 @@ if($Ps5OffsetDumpDefault){$sdkDefines += '-DPBS_PS5_OFFSET_DUMP_DEFAULT'}
 if($Ps5DependencyDumpDefault){$sdkDefines += '-DPBS_PS5_DEPENDENCY_DUMP_DEFAULT'}
 if($Ps5ModuleFileDumpDefault){$sdkDefines += '-DPBS_PS5_MODULE_FILE_DUMP_DEFAULT'}
 if($Ps5DiagnosticOpenOnly){$sdkDefines += '-DPBS_PS5_DIAGNOSTIC_OPEN_ONLY'}
-if($Ps5ExperimentalFw400){$sdkDefines += '-DPBS_PS5_EXPERIMENTAL_FW400'}
 if($Ps5DefaultResolution -eq '1080p'){$sdkDefines += '-DPBS_PS5_DEFAULT_1080P'}
 if($Ps5DefaultResolution -eq '720p'){$sdkDefines += '-DPBS_PS5_DEFAULT_720P'}
 if($Ps5DefaultResolution -eq '2160p'){$sdkDefines += '-DPBS_PS5_DEFAULT_2160P'}

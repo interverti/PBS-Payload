@@ -143,8 +143,6 @@ def analyze(gathered):
             entry["geometry"] = geometry(layout)
             entry["geometry_sha256"] = sha(json.dumps(entry["geometry"], sort_keys=True).encode())
             entry["status"] = "observed-avcap-and-native-constructor"
-            if fw == 0x04000042:
-                entry["status"] = "experimental-constructor-data-alignment"
         else:
             entry["status"] = "missing-or-conflicting-native-constructor"
         results.append(entry)

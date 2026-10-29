@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// EXPERIMENTAL: firmware 4.00 dump has a one-byte RIP/rodata mismatch.
-// Disabled in normal payload builds: compile with -DPBS_PS5_EXPERIMENTAL_FW400.
 #include "platform/ps5/offset/profile.h"
 
 const pbs_ps5_offset_profile pbs_ps5_offsets_400 = {

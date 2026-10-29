@@ -75,12 +75,11 @@ int main(void) {
   check(0x13000000,0,0);
   check(0x14000000,0,0);
   check(0xffffffff,0,0);
-#ifdef PBS_PS5_EXPERIMENTAL_FW400
+  /* 4.00 is measured since 2026-10-29: the dump's size store decodes at 0x1b7f12
+   * as `mov qword ptr [rdi+0x10], 0x230` and 0x33f is the Avcap2 prologue, so the
+   * profile is selected without any opt-in define. Exact-only like 3.20. */
   check(0x04000042,0x04000042,0x230);
-#else
-  check(0x04000042,0,0);
-#endif
   check(0x04000043,0,0);
-  puts("PASS: exact profile precedence, family interiors, build revisions, endpoints, gaps and experimental gating");
+  puts("PASS: exact profile precedence, family interiors, build revisions, endpoints and gaps");
   return 0;
 }
