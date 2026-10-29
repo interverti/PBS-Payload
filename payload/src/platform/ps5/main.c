@@ -591,11 +591,13 @@ avopen_retry:;
         if (probe_rc != LONG_MIN && (int32_t)(uint32_t)probe_rc >= 0 &&
             !pbs_inject_read_at(&ctx, base + 0x700, &output_mode, sizeof output_mode)) {
           fprintf(f, "Preflight videoOutMode=0x%x\n", output_mode);
-          if (output_mode == 0x10u) {
+          if (output_mode == 0x10u ||
+              pbs_ps5_prefer_1080_before_open(capture_firmware, output_mode)) {
             width = 1920;
             height = 1080;
             capture_feature = 12;
-            fprintf(f, "Auto capture profile=1080p feature=12\n");
+            fprintf(f, "Auto capture profile=1080p feature=12 (fw=0x%08x mode=0x%x)\n",
+                    capture_firmware, output_mode);
           }
         } else {
           fprintf(f, "Preflight videoOutMode unavailable; keeping requested profile\n");
