@@ -7,6 +7,11 @@ int main(void) {
   /* Bypass a known-rejected 1440p configuration before touching the encoder. */
   assert(pbs_ps5_prefer_1080_before_open(0x12700001u, 0x144u));
   assert(pbs_ps5_prefer_1080_before_open(0x13600007u, 0x14u));
+  /* 13.42 lacks a video-mode log: choose a conservative automatic startup
+   * for either possible value, including an unavailable preflight query. */
+  assert(pbs_ps5_prefer_1080_before_open(0x13420000u, 0u));
+  assert(pbs_ps5_prefer_1080_before_open(0x13420000u, 0x14u));
+  assert(pbs_ps5_prefer_1080_before_open(0x13420000u, 0x144u));
   assert(!pbs_ps5_prefer_1080_before_open(0x13600007u, 0x144u));
   assert(!pbs_ps5_prefer_1080_before_open(0x12700001u, 0x14u));
   assert(!pbs_ps5_prefer_1080_before_open(0x12400009u, 0x144u));
@@ -14,6 +19,7 @@ int main(void) {
 
   /* For all firmware, reject a failing automatic 1440p profile once and
    * retry 1080p after cleanup. Do not interpret mode values as HDR enums. */
+  assert(pbs_ps5_should_fallback_1080(0x13420000u, 0x81950008u, 0x14u, 2560, 1440));
   assert(pbs_ps5_should_fallback_1080(0x13600007u, 0x81950008u, 0x14u, 2560, 1440));
   assert(pbs_ps5_should_fallback_1080(0x12700001u, 0x81950008u, 0x144u, 2560, 1440));
   assert(pbs_ps5_should_fallback_1080(0x12400009u, 0x81950008u, 0x144u, 2560, 1440));
@@ -22,6 +28,6 @@ int main(void) {
   assert(!pbs_ps5_should_fallback_1080(0x13600007u, 0u, 0x14u, 2560, 1440));
   assert(!pbs_ps5_should_fallback_1080(0x13600007u, 0x81950008u, 0x14u, 1920, 1080));
   assert(!pbs_ps5_should_fallback_1080(0x13600007u, 0x81950008u, 0x14u, 3840, 2160));
-  puts("PASS: FW13.60/12.70 proactive 1080p, bounded fallback on 1440p rejection");
+  puts("PASS: FW13.42 conservative auto startup, FW13.60/12.70 proactive 1080p, bounded fallback");
   return 0;
 }

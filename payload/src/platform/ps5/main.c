@@ -610,6 +610,18 @@ avopen_retry:;
           return 1;
         }
       }
+      /* FW13.42 was observed rejecting an OpenVideo request, but the screenshot
+       * does not expose GetVideoOutMode. Its native layout matches 13.60, so
+       * select the compatibility profile even when the preflight query fails.
+       * This only affects automatic startup, never explicit resolution modes. */
+      if (width == 2560 && height == 1440 &&
+          pbs_ps5_prefer_1080_before_open(capture_firmware, 0u)) {
+        width = 1920;
+        height = 1080;
+        capture_feature = 12;
+        fprintf(f, "Auto capture profile=1080p feature=12 (fw=0x%08x, conservative startup)\n",
+                capture_firmware);
+      }
     }
     memset(scratch_zero, 0, sizeof scratch_zero);
     if (argc > 4) {
