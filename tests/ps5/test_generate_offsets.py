@@ -214,6 +214,18 @@ class GenerateOffsetsTests(unittest.TestCase):
                                check=True, capture_output=True, text=True)
             self.assertIn("only gated profiles can be inferred", caught.exception.stderr)
 
+    def test_mapped_prefix_bias_changes_only_code_rvas(self):
+        self.assertEqual(offsets.prefix_rva_bias(b"unknown image"), 0)
+        with mock.patch.object(offsets, "prefix_rva_bias", return_value=1):
+            with mock.patch.object(offsets, "_avcap_layout", return_value={
+                    "open_video": 0x33f, "ipc_command": 0x3ac4, "size": 0x230, "kind": 0x100}):
+                self.assertEqual(offsets.avcap_layout(b"known image"), {
+                    "open_video": 0x340, "ipc_command": 0x3ac5, "size": 0x230, "kind": 0x100})
+            with mock.patch.object(offsets, "_constructor_layout", return_value={
+                    "constructor": 0x1b7f12, "width": 0x168, "rate_group": 0x90}):
+                self.assertEqual(offsets.constructor_layout(b"known image", 0x230), {
+                    "constructor": 0x1b7f13, "width": 0x168, "rate_group": 0x90})
+
     def test_measured_400_matches_the_rendered_profile(self):
         result = offsets.read_profile_fields(PROFILES / "400.c")
         rendered = offsets.render_profile(0x04000042, result)
@@ -244,7 +256,7 @@ class GenerateOffsetsTests(unittest.TestCase):
             0x03200004: (0x360, 0x3b45, 0x218, 0xe8, 0x1af429,
                          0x78, 0x68, 0x20, 0x130, 0xe8, 0x40,
                          0x150, 0x154, 0x178, 0x200, 0x204),
-            0x04000042: (0x33f, 0x3ac4, 0x230, 0x100, 0x1b7f12,
+            0x04000042: (0x340, 0x3ac5, 0x230, 0x100, 0x1b7f13,
                          0x90, 0x68, 0x20, 0x148, 0xe8, 0x40,
                          0x168, 0x16c, 0x190, 0x218, 0x21c),
             0x06020004: (0x340, 0x3e15, 0x2a8, 0x168, 0x4a03a,

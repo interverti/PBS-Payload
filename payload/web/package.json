@@ -1,0 +1,15 @@
+{
+  "name": "pbs-web-player",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build-player.mjs"
+  },
+  "dependencies": {
+    "@videojs/core": "10.2.0",
+    "@videojs/html": "10.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}

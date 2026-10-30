@@ -15,6 +15,7 @@
 static inline int pbs_ps5_prefer_1080_before_open(
     uint32_t firmware, uint32_t video_mode) {
   return firmware == 0x13420000u ||
+         (firmware == 0x12400009u && video_mode == 0x140u) ||
          (firmware == 0x12700001u && video_mode == 0x144u) ||
          (firmware == 0x13600007u && video_mode == 0x14u);
 }

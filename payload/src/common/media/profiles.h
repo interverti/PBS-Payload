@@ -3,6 +3,10 @@
 /* The capture feature and size are one profile. Never reuse the 2160p
  * feature when reopening at 1080p (or vice versa). */
 typedef struct { int width, height; unsigned feature; } pbs_capture_profile;
+#define PBS_CAPTURE_PROFILES_ALL 15u
+static inline unsigned pbs_capture_profile_bit(int height) {
+  switch (height) { case 720:return 1; case 1080:return 2; case 1440:return 4; case 2160:return 8; default:return 0; }
+}
 static inline int pbs_capture_profile_for_height(int height, pbs_capture_profile *out) {
   pbs_capture_profile p;
   switch (height) {

@@ -40,8 +40,20 @@ int main(void) {
   assert(!pbs_h264_server_start(18092,2560,1440,sps,sizeof sps,pps,sizeof pps));
   request("POST","/capture/profile?height=1080",501);
   pbs_h264_enable_profiles();
+  request("GET","/config.json",200);
+  assert(strstr(response,"[720,1080,1440,2160]"));
   request("POST","/capture/profile?height=999",400);
   request("POST","/capture/profile?height=1080&extra=1",400);
+  pbs_h264_enable_profile_mask(11u);
+  request("GET","/config.json",200);
+  assert(strstr(response,"[720,1080,2160]"));
+  request("POST","/capture/profile?height=1440",422);
+  int rejected=0;
+  assert(!pbs_h264_take_restart_request());
+  assert(!pbs_h264_take_profile_request(&rejected));
+  switch_to(2160,10);
+  pbs_h264_enable_profiles();
+  switch_to(1440,11);
   switch_to(2160,10);switch_to(1080,12);switch_to(720,12);switch_to(1440,11);
   request("POST","/record/start",200);
   request("POST","/capture/profile?height=1080",409);
@@ -49,7 +61,7 @@ int main(void) {
   request("POST","/capture/profile?height=2160",200);
   pbs_h264_profile_failed();
   request("GET","/config.json",200);
-  assert(strstr(response,"\"height\":1440")&&strstr(response,"\"profile_error\":true"));
+  assert(strstr(response,"\"height\":1440")&&strstr(response,"\"profile_error\":true")&&strstr(response,"\"profile_error_height\":2160"));
   pbs_h264_server_stop();pbs_h264_server_wait();
   puts("Profile transitions, feature mapping, rollback state and recording conflicts verified");
 }

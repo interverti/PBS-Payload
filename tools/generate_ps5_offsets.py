@@ -8,6 +8,7 @@ Requires capstone (`python -m pip install capstone`). 7z/RAR input also requires
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -161,7 +162,26 @@ def mem_store(ins, base, size=None):
     return dst.mem.disp, src.imm if src.type == X86_OP_IMM else None
 
 
+# These two 4.00 prefixes start one byte past the mapped base. The supplied
+# runtime log resolves OpenVideo at +0x340, while the Avcap2 prefix has its
+# prologue at file +0x33f and matches 4.51 text byte-for-byte after that shift.
+# Normalize code RVAs only for the exact retained images; never shift field
+# offsets or infer a bias merely from an unfamiliar firmware/prologue.
+PREFIX_RVA_BIAS = {
+    "7254a46231e2b80c9a139f885288c6875b2f7cf72342fdb395b1ecc8087690da": 1,
+    "da506aacdbf01f098e84217a1519a4ba22863a7c69af37f19beee43bef0c9f0a": 1,
+}
+
+def prefix_rva_bias(data: bytes) -> int:
+    return PREFIX_RVA_BIAS.get(hashlib.sha256(data).hexdigest(), 0)
+
 def avcap_layout(data: bytes) -> dict:
+    result = _avcap_layout(data)
+    bias = prefix_rva_bias(data)
+    return result | {key: result[key] + bias for key in ("open_video", "ipc_command")}
+
+
+def _avcap_layout(data: bytes) -> dict:
     if len(data) < 0x8000 or data[:4] == b"\x54\x14\xf5\xee":
         raise ValueError("no decrypted Avcap2 memory image")
     md = disassembler()
@@ -462,6 +482,11 @@ def constructor_layout_simd(data: bytes, size: int) -> dict:
 
 
 def constructor_layout(data: bytes, size: int) -> dict:
+    result = _constructor_layout(data, size)
+    return result | {"constructor": result["constructor"] + prefix_rva_bias(data)}
+
+
+def _constructor_layout(data: bytes, size: int) -> dict:
     if len(data) < 0x100000:
         raise ValueError("no decrypted SceRemotePlay memory image")
     pattern = b"\x48\xc7\x43\x40" + size.to_bytes(4, "little")

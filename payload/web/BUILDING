@@ -1,0 +1,71 @@
+PBS Video.js integration
+
+The player uses pinned Video.js 10.2.0 HTML custom elements. The compiled ESM
+bundle and third-party notices in vendor/ are embedded by ../embed_assets.py
+into both console payloads. Console builds and viewing need no npm or CDN.
+
+After changing player.js, videojs-features.js, recording-preview.js, avc-recording.js, or package versions:
+  cd payload/web
+  npm ci --ignore-scripts
+  npm run build
+
+Commit the source, package lock, vendor/videojs-player.js and license notices
+together. Changes to h264.html alone need only the normal payload build.
+
+Audio is a PCM Web Audio channel separate from the native H.264 video element.
+The Video.js volume feature controls that channel directly, including on iOS
+where native video volume can be read-only. Initial gain and maximum gain are
+preserved; the standard 0..100% slider maps to the existing 0..4 PCM gain range.
+The separate dock keeps only the audio synchronization delay adjustment.
+
+The playback feature distinguishes user Pause from a decoder stall. The viewer
+keeps draining and bounding buffers during a user pause and resumes near live.
+The provider must upgrade before the skin imports: otherwise existing skin
+consumers can miss the player context during initial custom-element upgrades.
+PiP and remote playback remain unavailable because they cannot carry this
+separate PCM audio stream. Normal fullscreen uses the player container.
+
+Offline checks from repository root:
+  node tests/ps5/test_videojs_audio.js
+  node tests/ps5/test_dashboard_recovery.js
+  node tests/ps5/test_dashboard_recovery.js --managed
+  python -m unittest discover -s tests -p test_embed_assets.py
+
+The browser changes do not change capture bitrate, resolution or codec. Console
+capture stalls still require investigation independently of player behavior.
+
+Recordings and snapshots (#9, #10)
+The gallery opens one preview at a time. H.264 recordings are fetched in 256 KB
+HTTP byte ranges and remuxed in the browser with bounded buffers; the console
+does not transcode or generate thumbnails. Closing the dialog aborts transfers
+and releases media/object URLs. Video.js controls both live and recorded video.
+Live playback pauses during a recording preview and resumes near the live edge.
+Recordings contain video only, as before. New recordings have a small .h264.json
+sidecar with their dimensions, frame rate and frame count. Legacy recordings
+use their own SPS dimensions and VUI timing when present, and explicitly disclose
+estimated 60 fps timing otherwise.
+
+The destination is a console path under /data or a mounted /mnt/usb0..usb7.
+Changing it is blocked while recording and persists in /data/pbs/recording-directory.
+Changing destination leaves existing files in their original directory. Deletion
+requires a browser confirmation and refuses active recordings. File requests
+from the web gallery bind to the directory that was listed, so another browser
+changing the destination cannot redirect a pending deletion or preview.
+
+Additional recording parser check (requires ffmpeg/ffprobe on PATH):
+  node tests/media/avc_recording.cjs
+HTTP management, range, persistence and conflict tests run in tools/test_ps4_host.sh.
+
+Optional real-browser regression
+Run the local tests/http/dashboard_fixture.c fixture (the production server
+linked to a synthetic Annex B producer) with PBS_RECORD_DIR and PBS_RECORD_CONFIG
+pointing inside build/issue-tests/. Generate its input using ffmpeg testsrc2 at
+1280x720, 60 fps, libx264 with aud=1, bframes=0 and a 60-frame key interval.
+Install Playwright into build/web-player-test (npm install --prefix
+build/web-player-test --ignore-scripts playwright@1.56.1), then run:
+  node tests/browser/dashboard.cjs
+The test uses installed Chrome (PBS_CHROME may override its executable), requires
+a loopback fixture URL (PBS_TEST_URL defaults to http://127.0.0.1:18101), and
+refuses recording paths outside build/issue-tests/. It exercises production HTTP
+recording, destination selection, resolution failure reporting, snapshot and
+recording previews, returning to live, deletion and mobile overflow.

@@ -10,8 +10,13 @@ static void check(uint32_t firmware, uint32_t expected, uint32_t size) {
 }
 
 int main(void) {
+  const pbs_ps5_offset_profile *fw400=pbs_ps5_find_offsets(0x04000042u);
+  assert(fw400 && fw400->avcap2.open_video_rva==0x340u);
+  assert(fw400->avcap2.ipc_command_instruction_rva==0x3ac5u);
+  assert(fw400->remoteplay.width_offset==0x168u && fw400->remoteplay.height_offset==0x16cu);
   /* Exact entries must win even when another profile describes the family. */
   static const uint32_t exact[][2] = {
+    {0x04000042,0x230}, {0x04510001,0x230}, {0x12400009,0x2e0},
     {0x03200004,0x218}, {0x06020004,0x2a8}, {0x07200005,0x2a8},
     {0x08400005,0x2a8}, {0x09200005,0x2b0}, {0x09400008,0x2b0},
     {0x10010000,0x2b8}, {0x10600006,0x2b8}, {0x11200005,0x2e0},
@@ -75,13 +80,11 @@ int main(void) {
   check(0x13000000,0,0);
   check(0x14000000,0,0);
   check(0xffffffff,0,0);
-  /* 4.00 is measured since 2026-10-29: the dump's size store decodes at 0x1b7f12
-   * as `mov qword ptr [rdi+0x10], 0x230` and 0x33f is the Avcap2 prologue, so the
-   * profile is selected without any opt-in define. Exact-only like 3.20. */
+  /* 4.00 uses measured geometry and code RVAs normalized to the runtime base.
+   * The known prefix displacement does not change any request field. */
   check(0x04000042,0x04000042,0x230);
   check(0x04000043,0,0);
-  /* 4.51 repeats the 4.00 layout one byte later (open_video 0x340, IPC 0x3ac5,
-   * size store 0x1b7f13): it has its own dump, so it has its own exact ID. */
+  /* 4.51 repeats the same geometry and has its own exact dump/firmware ID. */
   check(0x04510001,0x04510001,0x230);
   check(0x04510000,0,0);
   puts("PASS: exact profile precedence, family interiors, build revisions, endpoints and gaps");

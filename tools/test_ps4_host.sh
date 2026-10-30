@@ -15,6 +15,7 @@ run() {
 }
 run firmware tests/ps4/system/firmware.c
 run ps5-capture-cleanup tests/ps5/capture_cleanup.c
+run ps5-capture-resolution tests/ps5/capture_resolution.c
 run problem-log tests/common/problem_log.c payload/src/common/diagnostics/problem_log.c
 run offset-report tests/ps4/dump/offset_report.c tools/dump/ps4/offset_report.c
 run kernel-image tests/ps4/dump/kernel_image.c tools/dump/ps4/kernel_image.c
@@ -84,7 +85,11 @@ run http-stream-jitter -pthread -Wl,--wrap=send -Wl,--wrap=sendto tests/http/str
 run http-profiles -pthread tests/http/profiles.c payload/src/common/http/server.c
 if command -v node >/dev/null 2>&1; then
   node tests/media/h264_mux_rate.js
+  if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+    node tests/media/avc_recording.cjs
+  fi
   node tests/ps5/test_dashboard_recovery.js
+  node tests/ps5/test_videojs_audio.js
   node tests/ps5/test_dashboard_recovery.js --managed
 else
   printf 'SKIP browser frame-rate regression: Node.js unavailable.\n'
@@ -92,6 +97,9 @@ fi
 record_dir=$(mktemp -d "$PWD/$out/recording.XXXXXX")
 "$cc" "${flags[@]}" -pthread "-DPBS_RECORD_DIR=\"$record_dir\"" tests/http/record_restart.c payload/src/common/http/server.c -o "$out/http-record"
 "$out/http-record" "$record_dir"
+storage_dir=$(mktemp -d "$PWD/$out/storage.XXXXXX")
+"$cc" "${flags[@]}" -pthread "-DPBS_RECORD_DIR=\"$storage_dir\"" "-DPBS_RECORD_CONFIG=\"$storage_dir/destination\"" tests/http/recording_management.c payload/src/common/http/server.c -o "$out/http-recording-management"
+"$out/http-recording-management"
 python3 -m unittest discover -s tests -p test_verify_ps4_capture.py
 python3 -m unittest discover -s tests -p test_inspect_ps4_venc_journal.py
 python3 -m unittest discover -s tests -p test_diagnose_ps4_log.py

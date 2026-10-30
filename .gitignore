@@ -45,3 +45,6 @@ docs/PS5_VIDEO_MODE_CROSS_FIRMWARE_AUDIT.txt
 *.txt
 !docs/RELEASING.md
 !CHANGELOG.md
+
+# Web player build dependencies
+node_modules/

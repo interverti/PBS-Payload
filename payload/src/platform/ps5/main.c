@@ -23,6 +23,7 @@
 #include "common/media/profiles.h"
 #include "common/process/inject.h"
 #include "platform/ps5/capture_fallback.h"
+#include "platform/ps5/capture_resolution.h"
 #include "platform/ps5/capture_cleanup.h"
 #include "platform/ps5/offset_dump.h"
 #include "platform/ps5/offset/profile.h"
@@ -312,11 +313,8 @@ static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int secon
   fprintf(f, "Start() -> %s\n", fmt_rc(rc));
   if (serving && native_rate_config && requested_video_bitrate > 30000000 &&
       rc != LONG_MIN && (int32_t)(uint32_t)rc < 0 && !ctx->asserted) {
-    /* Close this caller-owned handle before the outer loop retries the
-     * conservative profile. Never retry a failed remote call/assertion. */
-    fprintf(f, "High bitrate Start rejected; next capture uses 30M QP=35..51\n");
-    requested_video_bitrate = requested_video_budget = 30000000;
-    requested_min_qp = 35;
+    fprintf(f, "Start rejected at requested bitrate=%u; bitrate and QP remain unchanged\n",
+            requested_video_bitrate);
   }
   uint64_t total = 0, frames = 0;
   uint64_t measurement_start = 0, measurement_end = 0;
@@ -622,9 +620,12 @@ int main(int argc, char **argv) {
     int width = argc > 8 ? atoi(argv[8]) : 1280;
     int height = argc > 9 ? atoi(argv[9]) : 720;
     unsigned capture_feature = (unsigned)strtoul(argv[4], NULL, 0);
+    if (automatic_resolution && height==1440 && pbs_ps5_legacy_resolution_modes(capture_firmware)) {
+      width=1920; height=1080; capture_feature=12;
+    }
     pbs_capture_profile previous_profile = {width, height, capture_feature};
     int changing_profile = 0;
-    if (live_request) pbs_h264_enable_profiles();
+    if (live_request) pbs_h264_enable_profile_mask(pbs_ps5_legacy_resolution_modes(capture_firmware)?11u:PBS_CAPTURE_PROFILES_ALL);
     /* Diagnostic native frame-rate enum: 0=30, 1=60; 2 is unverified.
      * Streaming keeps the verified 60 fps profile and matching timestamps. */
     uint32_t fps_mode = argc > 10 ? (uint32_t)strtoul(argv[10], NULL, 0) : 1;
@@ -635,6 +636,11 @@ int main(int argc, char **argv) {
         !strcmp(mode, "avopenfast") ? capture_call_fast : capture_call;
     char failure_note[96] = "PBS: capture unavailable";
 avopen_retry:;
+    uint32_t requested_resolution;
+    if (pbs_ps5_resolution_mode(capture_firmware,height,&requested_resolution)) {
+      notify("PBS: 1440p capture unavailable on this firmware; select 1080p or 2160p");
+      return 1;
+    }
     uint32_t detected_video_mode = 0;
     uint32_t open_result = 0;
     live_profile_ready = 0;
@@ -701,7 +707,9 @@ avopen_retry:;
       uint64_t size = avcap->request_size, common_size = 0x28;
       uint32_t feature = capture_feature;
       uint32_t usage = argc > 5 ? (uint32_t)strtoul(argv[5], NULL, 0) : 2;
-      uint32_t resolution = width == 3840 ? 6 : width == 2560 ? 5 : width == 1920 ? 4 : 3;
+      /* Preflight may have changed the automatic profile since admission. */
+      pbs_ps5_resolution_mode(capture_firmware,height,&requested_resolution);
+      uint32_t resolution = requested_resolution;
       memcpy(scratch_zero + 8, &size, 8);
       memcpy(scratch_zero + 0x10, &common_size, 8);
       memcpy(scratch_zero + 8 + 0x14, &usage, 4);
@@ -744,6 +752,8 @@ avopen_retry:;
               avcap->request_size, feature, usage, width, height, fps_mode,
               capture_firmware, layout->firmware,
               capture_firmware == layout->firmware ? "exact" : "family-range");
+      fprintf(f,"Capture resolution enum=%u mapping=%s\n",resolution,
+              pbs_ps5_legacy_resolution_modes(capture_firmware)?"legacy-without-1440p":"with-1440p");
     }
     intptr_t fn_init = pbs_resolve_in(ctx.pid, "libSceAvcap2.sprx", "sceAvcap2Initialize");
     intptr_t fn_open = pbs_resolve_in(ctx.pid, "libSceAvcap2.sprx", "sceAvcap2OpenVideo");
@@ -850,6 +860,16 @@ avopen_retry:;
     if (rc==LONG_MIN || ctx.asserted) owned.uncertain=1;
     else if ((int32_t)(uint32_t)rc>=0) owned_session_closed=0;
     fprintf(f, "OpenVideo() -> %s%s\n", fmt_rc(rc), ctx.asserted ? " [ASSERT]" : "");
+    /* Venc propagates this code from several distinct failures. Preserve the
+     * actual request and resolved export fingerprints instead of guessing a
+     * resolution/bitrate downgrade. These observers issue no remote calls. */
+    if (rc != LONG_MIN && (uint32_t)rc == 0x80c78000u &&
+        !ctx.asserted && !offset_dumped) {
+      fprintf(f,"Encoder OpenVideo failure: collecting request/export diagnostics once; requested quality preserved\n");
+      pbs_ps5_dump_request(f,"encoder OpenVideo failure",scratch_zero+8,avcap->request_size);
+      pbs_ps5_dump_dependencies(f,&ctx);
+      offset_dumped=1;
+    }
     open_result = (uint32_t)rc;
     if (rc == LONG_MIN || (int32_t)(uint32_t)rc < 0 || ctx.asserted)
       snprintf(failure_note, sizeof failure_note, "PBS: OpenVideo 0x%08x%s",
@@ -918,6 +938,9 @@ avopen_cleanup:;
     if (live_request && clear_ok && !ctx.asserted && pbs_h264_take_profile_request(&requested_height)) {
       pbs_capture_profile next;
       if (!pbs_capture_profile_for_height(requested_height, &next)) {
+        /* A web/Studio selection is explicit, just like a command-line
+         * profile. Do not silently replace it with the automatic startup profile. */
+        automatic_resolution = 0;
         previous_profile = (pbs_capture_profile){width, height, capture_feature};
         width = next.width; height = next.height; capture_feature = next.feature;
         changing_profile = 1;

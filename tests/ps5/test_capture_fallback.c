@@ -7,6 +7,9 @@ int main(void) {
   /* Bypass a known-rejected 1440p configuration before touching the encoder. */
   assert(pbs_ps5_prefer_1080_before_open(0x12700001u, 0x144u));
   assert(pbs_ps5_prefer_1080_before_open(0x13600007u, 0x14u));
+  assert(pbs_ps5_prefer_1080_before_open(0x12400009u, 0x140u));
+  assert(!pbs_ps5_prefer_1080_before_open(0x12400009u, 0x138u));
+  assert(!pbs_ps5_prefer_1080_before_open(0x09400008u, 0x140u));
   /* 13.42 lacks a video-mode log: choose a conservative automatic startup
    * for either possible value, including an unavailable preflight query. */
   assert(pbs_ps5_prefer_1080_before_open(0x13420000u, 0u));

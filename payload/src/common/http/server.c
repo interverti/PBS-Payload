@@ -5,6 +5,7 @@
 #include "common/media/rtp.h"
 #include "common/media/buffer.h"
 #include "common/media/profiles.h"
+#include "common/http/byte_range.h"
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <dirent.h>
@@ -16,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -37,10 +39,8 @@ static void ps4_http_trace(const char *text) {
 #define KEYFRAME_INTERVAL_MS 2000u
 #define AUDIO_SLOTS 256
 #define AUDIO_MAX 0x10000u
-#ifndef PBS_RECORD_DIR
-#define PBS_RECORD_DIR "/data/pbs/recordings"
-#endif
-#define REC_DIR PBS_RECORD_DIR
+#include "common/http/recording_storage.h"
+#define REC_DIR recording_directory
 typedef struct { unsigned char *data; size_t len, capacity; uint64_t seq; uint32_t pts; int key; } frame_t;
 typedef struct { unsigned char *data; size_t len; uint64_t seq; uint32_t pts; } audio_chunk_t;
 static struct {
@@ -54,12 +54,13 @@ static struct {
   int running, listener, port, clients, key_request, rec_pending, width, height, fps;
   int media_clients;
   int restart_request;
-  int profiles_enabled, profile_pending, profile_changing, profile_height, profile_error;
+  int profiles_enabled, profile_pending, profile_changing, profile_height, profile_error, profile_error_height;
+  unsigned profile_mask;
   uint64_t generation;
   FILE *rec;
   int rec_headers_pending;
   uint64_t rec_frames, rec_bytes, rec_started;
-  int rec_error;
+  int rec_error, rec_width, rec_height, rec_fps;
   char rec_name[96];
   audio_chunk_t audio[AUDIO_SLOTS];
   uint64_t audio_seq, audio_bytes, audio_chunks;
@@ -98,7 +99,12 @@ int pbs_h264_take_restart_request(void) {
   return requested;
 }
 void pbs_h264_enable_profiles(void) {
-  pthread_mutex_lock(&live.lock); live.profiles_enabled = 1; pthread_mutex_unlock(&live.lock);
+  pbs_h264_enable_profile_mask(PBS_CAPTURE_PROFILES_ALL);
+}
+void pbs_h264_enable_profile_mask(unsigned mask) {
+  pthread_mutex_lock(&live.lock);
+  live.profiles_enabled=1; live.profile_mask=mask&PBS_CAPTURE_PROFILES_ALL;
+  pthread_mutex_unlock(&live.lock);
 }
 int pbs_h264_take_profile_request(int *height) {
   pthread_mutex_lock(&live.lock);
@@ -110,6 +116,7 @@ int pbs_h264_take_profile_request(int *height) {
 void pbs_h264_profile_failed(void) {
   pthread_mutex_lock(&live.lock);
   live.profile_error = 1; live.profile_changing = live.profile_pending = 0;
+  live.profile_error_height = live.profile_height;
   live.profile_height = live.height;
   pthread_mutex_unlock(&live.lock);
 }
@@ -150,12 +157,13 @@ static void select_profile(int fd, const char *path) {
   }
   pthread_mutex_lock(&live.lock);
   if (!live.profiles_enabled) { code = 501; message = "This capture backend does not support resolution changes"; }
+  else if (!(live.profile_mask & pbs_capture_profile_bit(height))) { code=422; message="This firmware does not support that capture resolution"; }
   else if (live.rec || live.rec_pending) { code = 409; message = "Stop recording before changing resolution"; }
   else if (live.profile_changing) { code = 409; message = "A resolution change is already in progress"; }
   else if (height == live.height) { message = "Resolution already active"; }
   else {
     live.profile_height = height; live.profile_pending = live.profile_changing = 1;
-    live.profile_error = 0; live.restart_request = 1;
+    live.profile_error = live.profile_error_height = 0; live.restart_request = 1;
   }
   pthread_mutex_unlock(&live.lock);
   profile_reply(fd, code, message);
@@ -170,6 +178,20 @@ static int rec_headers(FILE *f) {
   const unsigned char start[4] = {0, 0, 0, 1};
   return fwrite(start, 1, 4, f) != 4 || fwrite(live.sps, 1, live.sps_len, f) != live.sps_len ||
          fwrite(start, 1, 4, f) != 4 || fwrite(live.pps, 1, live.pps_len, f) != live.pps_len;
+}
+/* Record stream metadata alongside the Annex B file, so a preview does not
+ * borrow dimensions or timing from an unrelated current live profile. */
+static void close_recording(void) {
+  if (!live.rec) return;
+  if (fclose(live.rec)) live.rec_error=1;
+  live.rec=NULL;
+  char path[512]; snprintf(path,sizeof path,"%s/%s.json",REC_DIR,live.rec_name);
+  FILE *meta=fopen(path,"wb");
+  if (meta) {
+    fprintf(meta,"{\"width\":%d,\"height\":%d,\"fps\":%d,\"frames\":%llu}\n",
+        live.rec_width,live.rec_height,live.rec_fps,(unsigned long long)live.rec_frames);
+    fclose(meta);
+  }
 }
 int pbs_h264_publish(const void *data, size_t length, uint32_t pts) {
   if (!length || length > FRAME_MAX) return -1;
@@ -186,17 +208,19 @@ int pbs_h264_publish(const void *data, size_t length, uint32_t pts) {
   if (frame->key) live.last_keyframe_ms = milliseconds();
   live.seq = seq; live.bytes += length;
   if (live.rec_pending && frame->key && !live.rec) {
-    char path[192];
+    char path[512];
     snprintf(live.rec_name, sizeof live.rec_name, "pbs-%llu-%llu.h264", (unsigned long long)time(NULL), (unsigned long long)seq);
     snprintf(path, sizeof path, "%s/%s", REC_DIR, live.rec_name);
-    mkdir(REC_DIR, 0777);
-    live.rec = fopen(path, "wb");
+    int record_fd=storage_prepare(REC_DIR,1)?-1:open(path,O_WRONLY|O_CREAT|O_EXCL,0666);
+    live.rec=record_fd<0?NULL:fdopen(record_fd,"wb");
+    if (!live.rec && record_fd>=0) close(record_fd);
+    live.rec_width=live.width; live.rec_height=live.height; live.rec_fps=live.fps;
     live.rec_pending = 0;
     live.rec_headers_pending = 0;
     live.rec_frames = live.rec_bytes = 0;
     live.rec_started = milliseconds();
     if (!live.rec || rec_headers(live.rec)) {
-      if (live.rec) fclose(live.rec);
+      close_recording();
       live.rec = NULL;
       live.rec_error = 1;
     }
@@ -206,12 +230,12 @@ int pbs_h264_publish(const void *data, size_t length, uint32_t pts) {
    * wait for its first IDR and insert current SPS/PPS ahead of that IDR. */
   if (live.rec && live.rec_headers_pending && frame->key) {
     if (rec_headers(live.rec)) {
-      fclose(live.rec); live.rec = NULL; live.rec_error = 1;
+      close_recording(); live.rec_error = 1;
     } else live.rec_headers_pending = 0;
   }
   if (live.rec && !live.rec_headers_pending) {
     if (fwrite(data, 1, length, live.rec) != length || fflush(live.rec)) {
-      fclose(live.rec); live.rec = NULL; live.rec_error = 1;
+      close_recording(); live.rec_error = 1;
     } else { live.rec_frames++; live.rec_bytes += length; }
   }
   pthread_cond_broadcast(&live.changed);
@@ -280,7 +304,7 @@ void pbs_h264_server_stop(void) {
   live.port = 0;
   live.rec_pending = 0;
   live.rec_headers_pending = 0;
-  if (live.rec) { fclose(live.rec); live.rec = NULL; }
+  close_recording();
   if (live.listener >= 0) shutdown(live.listener, SHUT_RDWR);
   /* The accept socket is not the only blocking descriptor: a client may be
    * inside recv() on a partial HTTP header, or send() on a stalled viewer.
@@ -422,21 +446,26 @@ static void rtp_stream(int fd, int port) {
   pbs_video_free(copy, capacity);close(target.socket);
 }
 static void configuration(int fd) {
-  char sps[257], pps[257], body[1024], audio[160];
+  char sps[257], pps[257], body[1536], audio[160], resolutions[64];
 #ifdef PBS_PS4
   const char *platform = "PS4";
 #else
   const char *platform = "PS5";
 #endif
   pthread_mutex_lock(&live.lock);
+  size_t used=1;resolutions[0]='[';
+  const int heights[]={720,1080,1440,2160};
+  for (unsigned i=0;i<4;i++) if (live.profiles_enabled && (live.profile_mask&pbs_capture_profile_bit(heights[i])))
+    used+=(size_t)snprintf(resolutions+used,sizeof resolutions-used,"%s%d",used>1?",":"",heights[i]);
+  resolutions[used++]=']';resolutions[used]=0;
   for (size_t i = 0; i < live.sps_len; i++) snprintf(sps + i*2, 3, "%02x", live.sps[i]);
   for (size_t i = 0; i < live.pps_len; i++) snprintf(pps + i*2, 3, "%02x", live.pps[i]);
   if (!strcmp(live.audio_codec, "none")) snprintf(audio, sizeof audio, "null");
   else snprintf(audio, sizeof audio, "{\"codec\":\"%s\",\"channels\":%d,\"rate\":%d,\"bits\":32}",
       live.audio_codec[0] ? live.audio_codec : "pcm_f32le", live.audio_channels, live.audio_rate);
-  int n = snprintf(body, sizeof body, "{\"platform\":\"%s\",\"width\":%d,\"height\":%d,\"fps\":%d,\"codec\":\"avc1.%02x%02x%02x\",\"sps\":\"%s\",\"pps\":\"%s\",\"audio\":%s,\"resolutions\":%s,\"requested_height\":%d,\"profile_changing\":%s,\"profile_error\":%s}", platform, live.width, live.height, live.fps, live.sps[1], live.sps[2], live.sps[3], sps, pps, audio,
-      live.profiles_enabled ? "[720,1080,1440,2160]" : "[]", live.profile_changing ? live.profile_height : live.height,
-      live.profile_changing ? "true" : "false", live.profile_error ? "true" : "false");
+  int n = snprintf(body, sizeof body, "{\"platform\":\"%s\",\"width\":%d,\"height\":%d,\"fps\":%d,\"codec\":\"avc1.%02x%02x%02x\",\"sps\":\"%s\",\"pps\":\"%s\",\"audio\":%s,\"resolutions\":%s,\"requested_height\":%d,\"profile_changing\":%s,\"profile_error\":%s,\"profile_error_height\":%d}", platform, live.width, live.height, live.fps, live.sps[1], live.sps[2], live.sps[3], sps, pps, audio,
+      resolutions, live.profile_changing ? live.profile_height : live.height,
+      live.profile_changing ? "true" : "false", live.profile_error ? "true" : "false", live.profile_error_height);
   pthread_mutex_unlock(&live.lock);
   if (n > 0 && (size_t)n < sizeof body) reply(fd, "application/json", body, (size_t)n);
 }
@@ -461,33 +490,113 @@ static int valid_recording_name(const char *name) {
   for (const char *p = name; *p; p++) if (!isalnum((unsigned char)*p) && *p != '-' && *p != '.') return 0;
   return !strstr(name, "..");
 }
+static int recording_reference(const char *input,char name[96],char directory[PBS_STORAGE_PATH]) {
+  const char *query=strchr(input,'?');size_t size=query?(size_t)(query-input):strlen(input);
+  if (!size || size>=96) return -1;
+  memcpy(name,input,size);name[size]=0;directory[0]=0;
+  if (query && (strncmp(query,"?directory=",11) ||
+      storage_decode(query+11,directory,PBS_STORAGE_PATH) || !directory[0])) return -1;
+  return valid_recording_name(name)?0:-1;
+}
+static void recording_settings(int fd,const char *encoded) {
+  char path[PBS_STORAGE_PATH],body[512]; int code=200;
+  const char *message="Recording directory saved";
+  if (encoded && (storage_decode(encoded,path,sizeof path) || !storage_path_valid(path))) {
+    profile_reply(fd,400,"Use an absolute directory inside /data or a mounted USB drive"); return;
+  }
+  pthread_mutex_lock(&live.lock); storage_load();
+  if (encoded) {
+    if (live.rec || live.rec_pending) { code=409; message="Stop recording before changing its destination"; }
+    else if (storage_prepare(path,1)) { code=400; message="Destination unavailable; check the mount and directory"; }
+    else if (storage_save(path)) { code=500; message="Unable to save the recording directory"; }
+    else if (strcmp(REC_DIR,path)) {
+      strcpy(REC_DIR,path); live.rec_name[0]=0; live.rec_frames=live.rec_bytes=0;
+    }
+  }
+  int n=snprintf(body,sizeof body,"{\"directory\":\"%s\",\"recording\":%s}",REC_DIR,
+      live.rec || live.rec_pending?"true":"false");
+  pthread_mutex_unlock(&live.lock);
+  if (encoded) profile_reply(fd,code,message); else reply(fd,"application/json",body,(size_t)n);
+}
+static void delete_recording(int fd,const char *input) {
+  char name[96],directory[PBS_STORAGE_PATH];
+  if (recording_reference(input,name,directory)) { profile_reply(fd,400,"Invalid recording name"); return; }
+  pthread_mutex_lock(&live.lock); storage_load();
+  int code=200; const char *message="Recording deleted";
+  char path[512]; struct stat st;
+  snprintf(path,sizeof path,"%s/%.95s",REC_DIR,name);
+  if (directory[0] && strcmp(directory,REC_DIR)) { code=409; message="Recording destination changed; reload the list"; }
+  else if (live.rec && !strcmp(name,live.rec_name)) { code=409; message="Stop this recording before deleting it"; }
+  else if (lstat(path,&st) || !S_ISREG(st.st_mode)) { code=404; message="Recording not found"; }
+  else if (unlink(path)) { code=500; message="Unable to delete recording"; }
+  else {
+    snprintf(path,sizeof path,"%s/%.95s.json",REC_DIR,name); unlink(path);
+    if (!strcmp(live.rec_name,name)) live.rec_name[0]=0;
+  }
+  pthread_mutex_unlock(&live.lock); profile_reply(fd,code,message);
+}
+static void recording_info(int fd,const char *name) {
+  if (!valid_recording_name(name)) { profile_reply(fd,400,"Invalid recording name"); return; }
+  char path[512],body[256];
+  pthread_mutex_lock(&live.lock); storage_load();
+  if (live.rec && !strcmp(name,live.rec_name)) {
+    pthread_mutex_unlock(&live.lock); profile_reply(fd,409,"Stop recording before previewing it"); return;
+  }
+  snprintf(path,sizeof path,"%s/%.95s.json",REC_DIR,name);
+  pthread_mutex_unlock(&live.lock);
+  FILE *f=fopen(path,"rb");
+  if (!f) { reply(fd,"application/json","{}",2); return; }
+  size_t n=fread(body,1,sizeof body,f); int valid=n<sizeof body && !ferror(f); fclose(f);
+  if (valid) reply(fd,"application/json",body,n);
+  else profile_reply(fd,400,"Recording metadata unavailable");
+}
 static void recordings(int fd) {
   char body[16384]; size_t used = 1; body[0] = '[';
-  DIR *dir = opendir(REC_DIR);
+  char directory[PBS_STORAGE_PATH],active[96];
+  pthread_mutex_lock(&live.lock); storage_load(); strcpy(directory,REC_DIR);
+  snprintf(active,sizeof active,"%s",live.rec?live.rec_name:"");
+  pthread_mutex_unlock(&live.lock);
+  DIR *dir = opendir(directory);
   if (dir) {
     struct dirent *entry;
     while ((entry = readdir(dir)) && used < sizeof body - 256) {
       if (!valid_recording_name(entry->d_name)) continue;
       char path[512]; struct stat st;
-      snprintf(path, sizeof path, "%s/%s", REC_DIR, entry->d_name);
-      if (stat(path, &st) || !S_ISREG(st.st_mode)) continue;
-      used += snprintf(body + used, sizeof body - used, "%s{\"name\":\"%s\",\"bytes\":%llu}", used > 1 ? "," : "", entry->d_name, (unsigned long long)st.st_size);
+      snprintf(path, sizeof path, "%s/%s", directory, entry->d_name);
+      if (lstat(path, &st) || !S_ISREG(st.st_mode)) continue;
+      used += snprintf(body + used, sizeof body - used, "%s{\"name\":\"%s\",\"bytes\":%llu,\"active\":%s}", used > 1 ? "," : "", entry->d_name, (unsigned long long)st.st_size, !strcmp(active,entry->d_name)?"true":"false");
     }
     closedir(dir);
   }
   body[used++] = ']';
   reply(fd, "application/json", body, used);
 }
-static void download(int fd, const char *name) {
-  if (!valid_recording_name(name)) return;
-  char path[512]; snprintf(path, sizeof path, "%s/%s", REC_DIR, name);
-  FILE *file = fopen(path, "rb"); if (!file) return;
+static void download(int fd, const char *input,const char *range) {
+  char name[96],directory[PBS_STORAGE_PATH];
+  if (recording_reference(input,name,directory)) { profile_reply(fd,400,"Invalid recording name"); return; }
+  char path[512];
+  pthread_mutex_lock(&live.lock); storage_load();
+  if (directory[0] && strcmp(directory,REC_DIR)) {
+    pthread_mutex_unlock(&live.lock); profile_reply(fd,409,"Recording destination changed; reload the list"); return;
+  }
+  snprintf(path, sizeof path, "%s/%.95s", REC_DIR, name);
+  pthread_mutex_unlock(&live.lock);
+  FILE *file = fopen(path, "rb"); if (!file) { profile_reply(fd,404,"Recording not found"); return; }
   struct stat st;
-  if (fstat(fileno(file), &st)) { fclose(file); return; }
-  char header[320];
-  int n = snprintf(header, sizeof header, "HTTP/1.1 200 OK\r\nContent-Type: video/h264\r\nContent-Disposition: attachment; filename=\"%s\"\r\nContent-Length: %llu\r\nConnection: close\r\n\r\n", name, (unsigned long long)st.st_size);
+  if (fstat(fileno(file), &st) || !S_ISREG(st.st_mode)) { fclose(file); return; }
+  uint64_t first,last; int partial=recording_range(range,(uint64_t)st.st_size,&first,&last);
+  char header[512]; int n;
+  if (partial<0) {
+    n=snprintf(header,sizeof header,"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */%llu\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",(unsigned long long)st.st_size);
+    send_all(fd,header,(size_t)n); fclose(file); return;
+  }
+  uint64_t length=st.st_size?(last-first+1):0;
+  if (fseeko(file,(off_t)first,SEEK_SET)) { fclose(file); return; }
+  char content_range[128]="";
+  if (partial) snprintf(content_range,sizeof content_range,"Content-Range: bytes %llu-%llu/%llu\r\n",(unsigned long long)first,(unsigned long long)last,(unsigned long long)st.st_size);
+  n = snprintf(header, sizeof header, "HTTP/1.1 %s\r\nContent-Type: video/h264\r\nContent-Disposition: attachment; filename=\"%s\"\r\nAccept-Ranges: bytes\r\n%sContent-Length: %llu\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",partial?"206 Partial Content":"200 OK",name,content_range,(unsigned long long)length);
   if (!send_all(fd, header, n)) {
-    unsigned char buf[16384]; size_t got; uint64_t left = st.st_size;
+    unsigned char buf[16384]; size_t got; uint64_t left = length;
     while (left && (got = fread(buf, 1, left < sizeof buf ? (size_t)left : sizeof buf, file))) {
       if (send_all(fd, buf, got)) break;
       left -= got;
@@ -508,7 +617,7 @@ static void *client_thread(void *arg) {
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
   struct timeval header_timeout = {1, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &header_timeout, sizeof header_timeout);
-  char request[4096], method[12], path[256]; size_t used = 0;
+  char request[4096], method[12], path[1024]; size_t used = 0;
   uint64_t header_started = milliseconds();
   while (used < sizeof request - 1 && milliseconds() - header_started < 5000) {
     ssize_t got = recv(fd, request + used, sizeof request - used - 1, 0);
@@ -518,7 +627,15 @@ static void *client_thread(void *arg) {
   }
   if (!strstr(request, "\r\n\r\n")) goto done;
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
-  if (sscanf(request, "%11s %255s", method, path) != 2) goto done;
+  if (sscanf(request, "%11s %1023s", method, path) != 2) goto done;
+  char range[128]="";
+  for (const char *line=strstr(request,"\r\n");line && line[2];line=strstr(line+2,"\r\n")) {
+    if (!strncasecmp(line+2,"Range:",6)) {
+      const char *start=line+8; while (*start==' ' || *start=='\t') start++;
+      const char *end=strstr(start,"\r\n"); if (!end || (size_t)(end-start)>=sizeof range) goto done;
+      memcpy(range,start,(size_t)(end-start)); range[end-start]=0; break;
+    }
+  }
   int rtp_port = 0, consumed = 0;
   if (sscanf(path, "/rtp/video?port=%d%n", &rtp_port, &consumed) != 1 || path[consumed] || rtp_port < 1024 || rtp_port > 65534) rtp_port = 0;
   if (!strcmp(path, "/frames") || !strcmp(path, "/audio") || rtp_port) {
@@ -543,10 +660,15 @@ static void *client_thread(void *arg) {
   else if (!strcmp(method, "GET") && !strcmp(path, "/frames")) stream(fd);
   else if (!strcmp(method, "GET") && rtp_port) rtp_stream(fd,rtp_port);
   else if (!strcmp(method, "GET") && !strcmp(path, "/audio")) audio_stream(fd);
+  else if (!strcmp(method,"GET") && !strcmp(path,"/recording/settings")) recording_settings(fd,NULL);
+  else if (!strcmp(method,"POST") && !strncmp(path,"/recording/settings?path=",25)) recording_settings(fd,path+25);
+  else if (!strcmp(method,"DELETE") && !strncmp(path,"/recordings/",12)) delete_recording(fd,path+12);
+  else if (!strcmp(method,"GET") && !strncmp(path,"/recordings/info?name=",22)) recording_info(fd,path+22);
   else if (!strcmp(method, "GET") && !strcmp(path, "/recordings")) recordings(fd);
-  else if (!strcmp(method, "GET") && !strncmp(path, "/recordings/", 12)) download(fd, path + 12);
+  else if (!strcmp(method, "GET") && !strncmp(path, "/recordings/", 12)) download(fd, path + 12,range);
   else if (!strcmp(method, "POST") && !strcmp(path, "/record/start")) {
     pthread_mutex_lock(&live.lock);
+    storage_load();
     if (live.profile_changing) {
       pthread_mutex_unlock(&live.lock);
       profile_reply(fd, 409, "Wait for the resolution change before recording");
@@ -562,7 +684,7 @@ static void *client_thread(void *arg) {
     pthread_mutex_lock(&live.lock);
     live.rec_pending = 0;
     live.rec_headers_pending = 0;
-    if (live.rec) { fclose(live.rec); live.rec = NULL; }
+    close_recording();
     pthread_mutex_unlock(&live.lock);
     reply(fd, "application/json", "{}", 2);
   } else if (!strcmp(method, "POST") && !strcmp(path, "/video/keyframe")) {

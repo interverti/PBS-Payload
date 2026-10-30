@@ -4,13 +4,13 @@
 const pbs_ps5_offset_profile pbs_ps5_offsets_400 = {
   .firmware = 0x04000042u,
   .avcap2 = {
-    .open_video_rva = 0x33fu,
-    .ipc_command_instruction_rva = 0x3ac4u,
+    .open_video_rva = 0x340u,
+    .ipc_command_instruction_rva = 0x3ac5u,
     .request_size = 0x230u,
     .kind_offset = 0x100u,
   },
   .remoteplay = {
-    .request_size_store_rva = 0x1b7f12u,
+    .request_size_store_rva = 0x1b7f13u,
     .rate = {
       .offset = 0x90u,
       .size = 0x68u,

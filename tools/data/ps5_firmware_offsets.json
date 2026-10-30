@@ -20,10 +20,10 @@
       "firmware": "0x04000042",
       "profile": "400",
       "status": "exact",
-      "expected": {"request_size": "0x230", "kind_offset": "0x100", "native_size_store_rva": "0x1b7f12"},
+      "expected": {"request_size": "0x230", "kind_offset": "0x100", "native_size_store_rva": "0x1b7f13"},
       "source": "fw4.00.7z",
       "sha256": "19A85F30521A38E2EBA1B566C01F9721A27FA6A7320CF2DFB11AD2B05464454D",
-      "evidence": "PS5 dump of fw 0x04000042 from pid 61: a 4 MiB libSceAvcap2.sprx.prefix.bin with no missing pages plus the SceRemotePlay eboot prefix. Re-checked 2026-10-29: the size store decodes at 0x1b7f12 as mov qword ptr [rdi+0x10], 0x230 and 0x33f is a full Avcap2 prologue (push rbp; mov rbp, rsp; sub rsp, 0x98)",
+      "evidence": "PS5 dump of fw 0x04000042 from pid 61: a 4 MiB libSceAvcap2.sprx.prefix.bin with no missing pages plus the SceRemotePlay eboot prefix. Re-checked 2026-10-30: raw file offsets 0x1b7f12 (size store) and 0x33f (OpenVideo prologue) require +1 code-origin normalization for these exact SHA-256-identified prefixes. Runtime resolves OpenVideo at 0x340; normalized constructor RVA is 0x1b7f13. See docs/PS5_FW400_RESOLUTION.md",
       "notes": "The SIMD constructor's RIP-relative constants decode one byte early in this dump; the parser applies a +1 shift only when it yields a complete recognized descriptor pair (rate 0x68/0x20, image 0xe8/0x40), which it does here. mask tail is 0x14 bytes, not 0x24. Exact-only: another 4.00 build is refused"
     },
     {
@@ -35,7 +35,7 @@
       "source": "Fw4.51.zip",
       "sha256": "4E9D4834B0C4DD8ACE7D93271F11CA81EF3BC282301CE51E5BFC617EE9DB1C88",
       "evidence": "PS5 dump of fw 0x04510001 (2026-10-30) from pid 61, the SceRemotePlay process: a 4 MiB libSceAvcap2.sprx.prefix.bin plus the eboot prefix. The pid 57 image is SceAvCapture and has no RemotePlay constructor, so it is rejected instead of being merged",
-      "notes": "Same layout as 4.00 with every address one byte later: open_video 0x340 (0x33f), IPC 0x3ac5 (0x3ac4), size store 0x1b7f13 (0x1b7f12); request 0x230 and kind 0x100 are identical. Exact-only: another 4.51 build is refused"
+      "notes": "Same request geometry and normalized code RVAs as 4.00: open_video 0x340, IPC 0x3ac5, size store 0x1b7f13; request 0x230 and kind 0x100. The raw 4.00 code prefixes require +1 origin normalization. Both native backends use resolution 5 for 2160p and lack 1440p. Exact-only: another 4.51 build is refused"
     },
     {
       "release": "6.02",
