@@ -23,11 +23,40 @@
 #include "common/media/profiles.h"
 #include "common/process/inject.h"
 #include "platform/ps5/capture_fallback.h"
+#include "platform/ps5/capture_cleanup.h"
 #include "platform/ps5/offset_dump.h"
 #include "platform/ps5/offset/profile.h"
 #include "platform/ps5/module_dump.h"
 
 
+
+/* An interrupted remote call may still have acquired resources. Do not issue
+ * further remote calls or retry capture until that outcome is known. The
+ * streaming loop and its cleanup execute serially on the capture thread. */
+static int capture_call_uncertain;
+static unsigned capture_audio_unclosed;
+
+static long capture_call_fast(pbs_inject_t *ctx, intptr_t fn, const uint64_t args[6]) {
+  if (capture_call_uncertain || ctx->asserted) return LONG_MIN;
+  long rc = pbs_inject_call_fast(ctx, fn, args);
+  if (rc == LONG_MIN || ctx->asserted) capture_call_uncertain = 1;
+  return rc;
+}
+
+static long capture_call(pbs_inject_t *ctx, intptr_t fn, const uint64_t args[6]) {
+  if (capture_call_uncertain || ctx->asserted) return LONG_MIN;
+  long rc = pbs_inject_call(ctx, fn, args);
+  if (rc == LONG_MIN || ctx->asserted) capture_call_uncertain = 1;
+  return rc;
+}
+
+static long capture_call_fast_fp(pbs_inject_t *ctx, intptr_t fn,
+                                const uint64_t args[6], float value) {
+  if (capture_call_uncertain || ctx->asserted) return LONG_MIN;
+  long rc = pbs_inject_call_fast_fp(ctx, fn, args, value);
+  if (rc == LONG_MIN || ctx->asserted) capture_call_uncertain = 1;
+  return rc;
+}
 
 typedef struct {
   char useless1[45];
@@ -79,7 +108,7 @@ static void set_video_bitrate(FILE *f, pbs_inject_t *ctx, uint64_t handle) {
   if (requested_video_budget) fprintf(f, "SetVideoBitrate companion=%u\n", requested_video_budget);
   if (fn && !pbs_inject_write_at(ctx, ctx->scratch + 0x780, params, sizeof params))
     fprintf(f, "SetVideoBitrate(%u%s) -> %s\n", requested_video_bitrate,
-      bitrate_after_start ? " after Start" : "", fmt_rc(pbs_inject_call_fast(ctx, fn,
+      bitrate_after_start ? " after Start" : "", fmt_rc(capture_call_fast(ctx, fn,
       (uint64_t[6]){handle, (uint64_t)ctx->scratch + 0x780, 0, 0, 0, 0})));
 }
 
@@ -167,17 +196,18 @@ static int pbs_audio_open(FILE *f, pbs_inject_t *ctx, pbs_audio_t *audio, int wi
   param_u64(params, 0x428, 0x10);
   param_u32(params, 0x430, 128000);
   if (pbs_inject_write(ctx, params, sizeof params)) return -1;
-  long rc = pbs_inject_call_fast(ctx, open_fn, (uint64_t[6]){
+  long rc = capture_call_fast(ctx, open_fn, (uint64_t[6]){
       (uint64_t)ctx->scratch + 0x400, (uint64_t)ctx->scratch + 0x408, 0, 0, 0, 0});
   fprintf(f, "Audio OpenAudio(format=%u) -> %s%s\n", format, fmt_rc(rc), ctx->asserted ? " [ASSERT]" : "");
   if (rc == LONG_MIN || (int32_t)(uint32_t)rc < 0 || ctx->asserted) return -1;
+  ++capture_audio_unclosed;
   if (pbs_inject_read_at(ctx, ctx->scratch + 0x400, &audio->handle, sizeof audio->handle) || !audio->handle) {
     fprintf(f, "Audio handle mancante\n");
     return -1;
   }
-  audio->buffer = (intptr_t)pbs_inject_call_fast(ctx, audio->alloc_fn, (uint64_t[6]){65536, 0, 0, 0, 0, 0});
+  audio->buffer = (intptr_t)capture_call_fast(ctx, audio->alloc_fn, (uint64_t[6]){65536, 0, 0, 0, 0, 0});
   if (audio->buffer <= 0) return -1;
-  rc = pbs_inject_call_fast(ctx, start_fn, (uint64_t[6]){audio->handle, 0, 0, 0, 0, 0});
+  rc = capture_call_fast(ctx, start_fn, (uint64_t[6]){audio->handle, 0, 0, 0, 0, 0});
   fprintf(f, "Audio Start -> %s%s\n", fmt_rc(rc), ctx->asserted ? " [ASSERT]" : "");
   if (rc == LONG_MIN || (int32_t)(uint32_t)rc < 0) return -1;
   return 0;
@@ -188,15 +218,20 @@ static void pbs_audio_close(FILE *f, pbs_inject_t *ctx, pbs_audio_t *audio) {
     float original;
     memcpy(&original, &audio->vol_original, sizeof original);
     fprintf(f, "Audio SetAudioOutVolume(restore %.6f) -> %s\n", (double)original,
-            fmt_rc(pbs_inject_call_fast_fp(ctx, audio->setvol_fn, (uint64_t[6]){audio->handle, 0, 0, 0, 0, 0}, original)));
+            fmt_rc(capture_call_fast_fp(ctx, audio->setvol_fn, (uint64_t[6]){audio->handle, 0, 0, 0, 0, 0}, original)));
     audio->vol_changed = 0;
   }
   if (audio->handle && !ctx->asserted) {
-    if (audio->stop_fn) fprintf(f, "Audio Stop -> %s\n", fmt_rc(pbs_inject_call_fast(ctx, audio->stop_fn, (uint64_t[6]){audio->handle, 0, 0, 0, 0, 0})));
-    if (audio->close_fn) fprintf(f, "Audio Close -> %s\n", fmt_rc(pbs_inject_call_fast(ctx, audio->close_fn, (uint64_t[6]){audio->handle, 0, 0, 0, 0, 0})));
+    if (audio->stop_fn) fprintf(f, "Audio Stop -> %s\n", fmt_rc(capture_call_fast(ctx, audio->stop_fn, (uint64_t[6]){audio->handle, 0, 0, 0, 0, 0})));
+    if (audio->close_fn) {
+      long rc = capture_call_fast(ctx, audio->close_fn, (uint64_t[6]){audio->handle, 0, 0, 0, 0, 0});
+      fprintf(f, "Audio Close -> %s\n", fmt_rc(rc));
+      if (rc != LONG_MIN && (int32_t)(uint32_t)rc >= 0 && !ctx->asserted)
+        --capture_audio_unclosed;
+    }
   }
-  if (audio->buffer > 0 && !ctx->asserted && audio->free_fn)
-    pbs_inject_call_fast(ctx, audio->free_fn, (uint64_t[6]){(uint64_t)audio->buffer, 0, 0, 0, 0, 0});
+  if (audio->buffer > 0 && !capture_audio_unclosed && !ctx->asserted && audio->free_fn)
+    capture_call_fast(ctx, audio->free_fn, (uint64_t[6]){(uint64_t)audio->buffer, 0, 0, 0, 0, 0});
   if (audio->raw) fclose(audio->raw);
   if (audio->info) fclose(audio->info);
   if (audio->analyze && audio->floats)
@@ -211,7 +246,7 @@ static void pbs_audio_close(FILE *f, pbs_inject_t *ctx, pbs_audio_t *audio) {
 /* Drain at most rounds available audio packets into the reusable local frame buffer. */
 static void pbs_audio_drain(FILE *f, pbs_inject_t *ctx, pbs_audio_t *audio, unsigned char *frame, int rounds) {
   for (int i = 0; i < rounds && audio->read_fn; i++) {
-    long rc = pbs_inject_call_fast(ctx, audio->read_fn, (uint64_t[6]){audio->handle,
+    long rc = capture_call_fast(ctx, audio->read_fn, (uint64_t[6]){audio->handle,
         (uint64_t)audio->buffer, 65536, (uint64_t)ctx->scratch + 0x500, 1, 0});
     if (rc == LONG_MIN) { fprintf(f, "Audio ReadAudio timeout\n"); break; }
     int32_t count = (int32_t)(uint32_t)rc;
@@ -263,7 +298,7 @@ static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int secon
   intptr_t release = pbs_resolve_in(ctx->pid, "libSceLibcInternal.sprx", "free");
   intptr_t request_key = pbs_resolve_in(ctx->pid, "libSceAvcap2.sprx", "sceAvcap2RequestKeyFrame");
   if (!start || !stop || !read || !alloc || !release) return -1;
-  long buffer = pbs_inject_call_fast(ctx, alloc, (uint64_t[6]){0x200000, 0, 0, 0, 0, 0});
+  long buffer = capture_call_fast(ctx, alloc, (uint64_t[6]){0x200000, 0, 0, 0, 0, 0});
   if (buffer <= 0) return -1;
   unsigned char *frame = malloc(0x200000);
   if (!frame) goto capture_free;
@@ -273,7 +308,7 @@ static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int secon
   pbs_audio_t audio;
   memset(&audio, 0, sizeof audio);
   if (audio_mode == 2 && !pbs_audio_open(f, ctx, &audio, width, 0)) audio.publish = 1;
-  long rc = pbs_inject_call_fast(ctx, start, (uint64_t[6]){handle, 0, 0, 0, 0, 0});
+  long rc = capture_call_fast(ctx, start, (uint64_t[6]){handle, 0, 0, 0, 0, 0});
   fprintf(f, "Start() -> %s\n", fmt_rc(rc));
   if (serving && native_rate_config && requested_video_bitrate > 30000000 &&
       rc != LONG_MIN && (int32_t)(uint32_t)rc < 0 && !ctx->asserted) {
@@ -291,7 +326,7 @@ static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int secon
     if (requested_video_bitrate && bitrate_after_start) set_video_bitrate(f, ctx, handle);
     intptr_t headers = pbs_resolve_in(ctx->pid, "libSceAvcap2.sprx", "sceAvcap2GetNonVclNalUnitStream");
     if (headers) {
-      long hr = pbs_inject_call_fast(ctx, headers, (uint64_t[6]){handle, (uint64_t)buffer, 0, 0, 0, 0});
+      long hr = capture_call_fast(ctx, headers, (uint64_t[6]){handle, (uint64_t)buffer, 0, 0, 0, 0});
       fprintf(f, "GetNonVclNalUnitStream() -> %s\n", fmt_rc(hr));
       unsigned char metadata[0x1a8];
       if (hr != LONG_MIN && (int32_t)(uint32_t)hr >= 0 &&
@@ -353,12 +388,12 @@ static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int secon
                       frames % stress_keyframe_period == 0 && frames != last_stress_key_frame;
       if (request_key && (key_requested || stress_key)) {
         if (stress_key) last_stress_key_frame = frames;
-        long kr = pbs_inject_call_fast(ctx, request_key, (uint64_t[6]){handle, 0, 0, 0, 0, 0});
+        long kr = capture_call_fast(ctx, request_key, (uint64_t[6]){handle, 0, 0, 0, 0, 0});
         if (key_requested || kr == LONG_MIN || (int32_t)(uint32_t)kr < 0)
           fprintf(f, "RequestKeyFrame() -> %s%s\n", fmt_rc(kr), ctx->asserted ? " [ASSERT]" : "");
         if (kr == LONG_MIN || ctx->asserted) break;
       }
-      rc = pbs_inject_call_fast(ctx, read, (uint64_t[6]){handle, (uint64_t)buffer,
+      rc = capture_call_fast(ctx, read, (uint64_t[6]){handle, (uint64_t)buffer,
           0x200000, (uint64_t)ctx->scratch + 0x300, 0, 0});
       if (rc == LONG_MIN) {
         fprintf(f, "ReadVideo timeout\n");
@@ -396,7 +431,7 @@ static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int secon
       if (audio.handle && !ctx->asserted) pbs_audio_drain(f, ctx, &audio, frame, 2);
     }
     if (serving) fprintf(f, "live loop exit running=%d asserted=%d\n", pbs_h264_server_running(), ctx->asserted);
-    long sr = pbs_inject_call_fast(ctx, stop, (uint64_t[6]){handle, 0, 0, 0, 0, 0});
+    long sr = capture_call_fast(ctx, stop, (uint64_t[6]){handle, 0, 0, 0, 0, 0});
     measurement_end = capture_clock_ms();
     fprintf(f, "Stop() -> %s\n", fmt_rc(sr));
   }
@@ -415,8 +450,38 @@ static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int secon
   fclose(out);
 capture_free:
   free(frame);
-  pbs_inject_call_fast(ctx, release, (uint64_t[6]){(uint64_t)buffer, 0, 0, 0, 0, 0});
+  capture_call_fast(ctx, release, (uint64_t[6]){(uint64_t)buffer, 0, 0, 0, 0, 0});
   return recover;
+}
+
+typedef struct {
+  FILE *log;
+  pbs_inject_t *ctx;
+  long (*call)(pbs_inject_t *,intptr_t,const uint64_t[6]);
+  intptr_t change, clear, terminate, state_address;
+  unsigned feature;
+} capture_release_context;
+
+static int release_capture_step(void *opaque,pbs_ps5_release_step step) {
+  capture_release_context *r=opaque;
+  if (r->ctx->asserted) return -1;
+  intptr_t fn=step==PBS_PS5_RELEASE_STOP?r->change:
+              step==PBS_PS5_RELEASE_CALLBACK?r->clear:r->terminate;
+  if (!fn) return -1;
+  uint64_t args[6]={0};
+  if (step!=PBS_PS5_RELEASE_INITIALIZE) args[0]=r->feature;
+  if (step==PBS_PS5_RELEASE_STOP) {
+    const char state[32]="STOP";
+    if (pbs_inject_write_at(r->ctx,r->state_address,state,sizeof state)) return -1;
+    args[1]=(uint64_t)r->state_address;
+  }
+  long rc=r->call(r->ctx,fn,args);
+  if (step==PBS_PS5_RELEASE_STOP)
+    fprintf(r->log,"ChangeState(%u, STOP) -> %s\n",r->feature,fmt_rc(rc));
+  else if (step==PBS_PS5_RELEASE_CALLBACK)
+    fprintf(r->log,"ClearCallback(%u) -> %s\n",r->feature,fmt_rc(rc));
+  else fprintf(r->log,"Terminate(owned Initialize) -> %s\n",fmt_rc(rc));
+  return rc==LONG_MIN || r->ctx->asserted || (int32_t)(uint32_t)rc<0 ? -1:0;
 }
 
 /* Production entry point: exported capture APIs and caller-owned handles. */
@@ -563,7 +628,7 @@ int main(int argc, char **argv) {
     if (!((width == 1280 && height == 720) || (width == 1920 && height == 1080) ||
           (width == 2560 && height == 1440) || (width == 3840 && height == 2160))) return 1;
     long (*call)(pbs_inject_t *, intptr_t, const uint64_t[6]) =
-        !strcmp(mode, "avopenfast") ? pbs_inject_call_fast : pbs_inject_call;
+        !strcmp(mode, "avopenfast") ? capture_call_fast : capture_call;
     char failure_note[96] = "PBS: capture unavailable";
 avopen_retry:;
     uint32_t detected_video_mode = 0;
@@ -575,7 +640,10 @@ avopen_retry:;
     FILE *f = open_report("inject.txt", "a");
     if (!f) return 1;
     fprintf(f, "%s %s %s\n", mode, argv[2], how);
+    fprintf(f, "Capture lifecycle: owned-init + resource STOP cleanup v1\n");
     pbs_inject_t ctx;
+    capture_call_uncertain = 0;
+    capture_audio_unclosed = 0;
     if (pbs_inject_begin(argv[2], &ctx)) {
       fprintf(f, "begin failed errno=%d\n", errno);
       fclose(f);
@@ -602,8 +670,8 @@ avopen_retry:;
         } else {
           fprintf(f, "Preflight videoOutMode unavailable; keeping requested profile\n");
         }
-        if (ctx.asserted) {
-          fprintf(f, "Preflight videoOutMode asserted; stopping capture\n");
+        if (capture_call_uncertain || ctx.asserted) {
+          fprintf(f, "Preflight videoOutMode interrupted/asserted; stopping capture\n");
           pbs_inject_end(&ctx);
           fclose(f);
           notify("PBS: video mode query failed");
@@ -678,8 +746,9 @@ avopen_retry:;
     intptr_t fn_oaudio = pbs_resolve_in(ctx.pid, "libSceAvcap2.sprx", "sceAvcap2OpenAudio");
     intptr_t fn_term = pbs_resolve_in(ctx.pid, "libSceAvcap2.sprx", "sceAvcap2Terminate");
     intptr_t fn_clear = 0;
+    intptr_t fn_change = 0;
     uint32_t grant_feature = 0;
-    int granted_callback = 0;
+    pbs_ps5_capture_ownership owned={0};
     if (pbs_inject_write(&ctx, scratch_zero, 0x800)) {
       fprintf(f, "initial capture parameters could not be written\n");
       goto avopen_cleanup;
@@ -706,9 +775,16 @@ avopen_retry:;
       long tr = call(&ctx, fn_term, (uint64_t[6]){0, 0, 0, 0, 0, 0});
       fprintf(f, "Terminate() -> %s\n", fmt_rc(tr));
     }
-    if (strcmp(how, "none") && fn_init) {
+    if (strcmp(how, "none")) {
+      if (!fn_init || !fn_term) {
+        fprintf(f,"Initialize refused: Initialize/Terminate export pair unavailable\n");
+        goto avopen_cleanup;
+      }
       long ir = call(&ctx, fn_init, (uint64_t[6]){0, 0, 0, 0, 0, 0});
       fprintf(f, "Initialize() -> %s\n", fmt_rc(ir));
+      if (ir==LONG_MIN || ctx.asserted) { owned.uncertain=1; goto avopen_cleanup; }
+      if ((int32_t)(uint32_t)ir<0) goto avopen_cleanup;
+      owned.initialized=1;
     }
     if (!strcmp(how, "grant")) {
       grant_feature = capture_feature;
@@ -716,7 +792,7 @@ avopen_retry:;
       if (strcmp(mode, "avopenfast") ||
           grant_feature != (width == 3840 ? 10u : width == 2560 ? 11u : 12u)) goto avopen_cleanup;
       intptr_t fn_set = pbs_resolve_in(ctx.pid, "libSceResourceArbitrator.sprx", "sceResourceArbitratorSetCallback");
-      intptr_t fn_change = pbs_resolve_in(ctx.pid, "libSceResourceArbitrator.sprx", "sceResourceArbitratorChangeState");
+      fn_change = pbs_resolve_in(ctx.pid, "libSceResourceArbitrator.sprx", "sceResourceArbitratorChangeState");
       fn_clear = pbs_resolve_in(ctx.pid, "libSceResourceArbitrator.sprx", "sceResourceArbitratorClearCallback");
       /* Use getpid as a stable no-op callback that ignores notification arguments. */
       intptr_t callback = pbs_resolve_in(ctx.pid, "libkernel_sys.sprx", "getpid");
@@ -726,14 +802,17 @@ avopen_retry:;
       }
       long ar = call(&ctx, fn_set, (uint64_t[6]){grant_feature, (uint64_t)callback, 0, 0, 0, 0});
       fprintf(f, "SetCallback(%u) -> %s\n", grant_feature, fmt_rc(ar));
-      if (ar == LONG_MIN || (int32_t)(uint32_t)ar < 0) goto avopen_cleanup;
-      granted_callback = 1;
+      if (ar==LONG_MIN || ctx.asserted) { owned.uncertain=1; goto avopen_cleanup; }
+      if ((int32_t)(uint32_t)ar < 0) goto avopen_cleanup;
+      owned.callback = 1;
       char state[32] = "RUNNING";
       memcpy(scratch_zero + 0x600, state, sizeof state);
       if (pbs_inject_write(&ctx, scratch_zero, 0x800)) goto avopen_cleanup;
       ar = call(&ctx, fn_change, (uint64_t[6]){grant_feature, (uint64_t)base + 0x600, 0, 0, 0, 0});
       fprintf(f, "ChangeState(%u, RUNNING) -> %s\n", grant_feature, fmt_rc(ar));
-      if (ar == LONG_MIN || (int32_t)(uint32_t)ar < 0) goto avopen_cleanup;
+      if (ar==LONG_MIN || ctx.asserted) { owned.uncertain=1; goto avopen_cleanup; }
+      if ((int32_t)(uint32_t)ar < 0) goto avopen_cleanup;
+      owned.running=1;
       intptr_t fn_enable = pbs_resolve_in(ctx.pid, "libSceAvcap2.sprx", "sceAvcap2EnableScanInEncode");
       if (fn_enable) fprintf(f, "EnableScanInEncode() -> %s\n", fmt_rc(call(&ctx,
           fn_enable, (uint64_t[6]){0, 0, 0, 0, 0, 0})));
@@ -764,6 +843,8 @@ avopen_retry:;
     }
     long rc = fn_open ? call(&ctx, fn_open,
                               (uint64_t[6]){(uint64_t)base, (uint64_t)base + 8, 0, 0, 0, 0}) : LONG_MIN;
+    if (rc==LONG_MIN || ctx.asserted) owned.uncertain=1;
+    else if ((int32_t)(uint32_t)rc>=0) owned_session_closed=0;
     fprintf(f, "OpenVideo() -> %s%s\n", fmt_rc(rc), ctx.asserted ? " [ASSERT]" : "");
     open_result = (uint32_t)rc;
     if (rc == LONG_MIN || (int32_t)(uint32_t)rc < 0 || ctx.asserted)
@@ -779,7 +860,7 @@ avopen_retry:;
       }
     }
     if (fn_oaudio && strcmp(mode, "avopenfast")) {
-      long ar = pbs_inject_call(&ctx, fn_oaudio,
+      long ar = capture_call(&ctx, fn_oaudio,
                                 (uint64_t[6]){(uint64_t)base + 0x10, (uint64_t)base + 0x18, 0, 0, 0, 0});
       fprintf(f, "OpenAudio() -> %s%s\n", fmt_rc(ar), ctx.asserted ? " [ASSERT]" : "");
     }
@@ -802,13 +883,11 @@ avopen_retry:;
       }
     }
 avopen_cleanup:;
-    int clear_ok = !granted_callback;
-    if (granted_callback && !ctx.asserted) {
-      long clear_rc = call(&ctx, fn_clear, (uint64_t[6]){grant_feature, 0, 0, 0, 0, 0});
-      fprintf(f, "ClearCallback(%u) -> %s\n", grant_feature, fmt_rc(clear_rc));
-      clear_ok = clear_rc != LONG_MIN && (int32_t)(uint32_t)clear_rc >= 0;
-    }
-    clear_ok = clear_ok && owned_session_closed;
+    if (capture_call_uncertain || capture_audio_unclosed || ctx.asserted) owned.uncertain=1;
+    capture_release_context release_ctx={f,&ctx,call,fn_change,fn_clear,fn_term,base+0x600,grant_feature};
+    int clear_ok = !pbs_ps5_release_capture(&owned,owned_session_closed,
+                                           release_capture_step,&release_ctx);
+    if (!clear_ok) fprintf(f,"Capture cleanup incomplete; no automatic retry or profile change\n");
     /* Retrying the smaller caller-owned profile is safe only after cleanup. */
     int fallback_1080 = live_request && automatic_resolution && clear_ok && !ctx.asserted &&
         pbs_ps5_should_fallback_1080(capture_firmware, open_result,
@@ -818,8 +897,8 @@ avopen_cleanup:;
               open_result, detected_video_mode);
     pbs_inject_end(&ctx);
     fclose(f);
-    /* Reconfigure only after Stop/Close/ClearCallback completed for the old
-     * caller-owned session. Keep the HTTP listener for reconnecting viewers. */
+    /* Reconfigure only after closing handles, stopping the resource request,
+     * clearing its callback and balancing our Initialize reference. */
     if (changing_profile && !live_profile_ready) {
       pbs_h264_profile_failed();
       width = previous_profile.width; height = previous_profile.height;
