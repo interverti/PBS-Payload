@@ -38,6 +38,21 @@
       "notes": "Same request geometry and normalized code RVAs as 4.00: open_video 0x340, IPC 0x3ac5, size store 0x1b7f13; request 0x230 and kind 0x100. The raw 4.00 code prefixes require +1 origin normalization. Both native backends use resolution 5 for 2160p and lack 1440p. Exact-only: another 4.51 build is refused"
     },
     {
+      "release": "5.10",
+      "firmware": "0x05100023",
+      "profile": "510",
+      "status": "exact",
+      "expected": {
+        "request_size": "0x298",
+        "kind_offset": "0x168",
+        "native_size_store_rva": "0x472ad"
+      },
+      "source": "fw5.10.zip",
+      "sha256": "A3B4A5B46B29F8CA1E5A5281A6D9C985F7F2C8C3C5C1450B1AD99959ABD09BEA",
+      "evidence": "2026-10-30 dump of firmware 0x05100023: SceRemotePlay pid 59 Avcap2 and EBOOT prefixes, both missing_pages=0. OpenVideo 0x350, IPC 0x3d35 copies 0x298 bytes; native RBX+0x10 header at 0x472ad agrees. SceAvCapture pid 58 provides the legacy six-entry resolution table at 0x21964. See docs/PS5_FW510_PROFILE.md.",
+      "notes": "Exact-only: another 5.10 build is refused. Rate 0x90/0xd0, image 0x1b0/0xe8, width/height 0x1d0/0x1d4, mask 0x284 with 0x14-byte span. Legacy resolution mapping: 2160p=5, no 1440p; automatic startup 1080p. Not inherited from 4.51 or 6.02; runtime capture validation pending."
+    },
+    {
       "release": "6.02",
       "firmware": "0x06020004",
       "profile": "602",

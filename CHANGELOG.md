@@ -3,6 +3,16 @@
 Notable changes to PBS Payload. `VERSION` at the repository root holds the
 numeric version; a release tag may add a suffix (`v0.2.0-beta.1`).
 
+## Unreleased
+
+- Add the measured PS5 5.10 profile for firmware `0x05100023`, with its own
+  `0x298` request and short mask tail. Other 5.10 builds remain unrecognized.
+- Use the native legacy resolution table on 5.10: automatic 1080p startup,
+  2160p enum 5, no 1440p option. Default bitrate remains 60 Mbps.
+- Pass the granted video resource feature to OpenAudio, fixing the 4K
+  request mismatch (video feature 10 versus the previous audio feature 12).
+  Console confirmation of 5.10 capture and restored 4K audio is pending.
+
 ## v0.2.0-beta.1 — 2026-10-29
 
 Beta, pre-release. First release of the 0.2.0 line: both console payloads build

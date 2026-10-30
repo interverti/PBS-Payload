@@ -356,11 +356,14 @@ def constructor_layout_simd(data: bytes, size: int) -> dict:
 
     # Some early firmware uses a direct qword header size store through RDI,
     # followed by SIMD descriptor copies through its saved alias in RBX.
-    scalar_signature = b"\x48\xc7\x47\x10" + size.to_bytes(4, "little")
-    start = 0
-    while (start := data.find(scalar_signature, start)) >= 0:
-        starts.append((start, (start, 0x10)))
-        start += 1
+    # 5.10 stores the same header through the saved RBX alias, rather than
+    # RDI. Descriptor order, dimensions and request end must still agree.
+    for prefix in (b"\x48\xc7\x47\x10", b"\x48\xc7\x43\x10"):
+        scalar_signature = prefix + size.to_bytes(4, "little")
+        start = 0
+        while (start := data.find(scalar_signature, start)) >= 0:
+            starts.append((start, (start, 0x10)))
+            start += 1
 
     for addr, scalar_header in starts:
         # Decode the contiguous constructor after its signature load. All

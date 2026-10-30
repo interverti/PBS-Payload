@@ -110,7 +110,7 @@ class LedgerTests(unittest.TestCase):
     def test_cli_check_list_and_markdown(self):
         base = [sys.executable, str(TOOLS / "ps5_firmware_table.py")]
         checked = subprocess.run(base + ["--check"], check=True, capture_output=True, text=True)
-        self.assertIn("20 profiles", checked.stdout)
+        self.assertIn("21 profiles", checked.stdout)
         self.assertIn("5 refused releases", checked.stdout)
 
         listing = subprocess.run(base + ["--list"], check=True, capture_output=True, text=True)

@@ -24,6 +24,7 @@
 #include "common/process/inject.h"
 #include "platform/ps5/capture_fallback.h"
 #include "platform/ps5/capture_resolution.h"
+#include "platform/ps5/capture_audio_request.h"
 #include "platform/ps5/capture_cleanup.h"
 #include "platform/ps5/offset_dump.h"
 #include "platform/ps5/offset/profile.h"
@@ -178,7 +179,7 @@ typedef struct {
 } pbs_audio_t;
 
 /* Open the audio channel with the verified 0x38-byte parameter structure: common size 0x18, usage 2, format, arbitrator feature and 128 kbit/s rate. */
-static int pbs_audio_open(FILE *f, pbs_inject_t *ctx, pbs_audio_t *audio, int width, uint32_t format) {
+static int pbs_audio_open(FILE *f, pbs_inject_t *ctx, pbs_audio_t *audio, unsigned capture_feature, uint32_t format) {
   memset(audio, 0, sizeof *audio);
   intptr_t open_fn = pbs_resolve_in(ctx->pid, "libSceAvcap2.sprx", "sceAvcap2OpenAudio");
   intptr_t start_fn = pbs_resolve_in(ctx->pid, "libSceAvcap2.sprx", "sceAvcap2Start");
@@ -189,17 +190,11 @@ static int pbs_audio_open(FILE *f, pbs_inject_t *ctx, pbs_audio_t *audio, int wi
   audio->free_fn = pbs_resolve_in(ctx->pid, "libSceLibcInternal.sprx", "free");
   if (!open_fn || !start_fn || !audio->read_fn || !audio->alloc_fn) return -1;
   unsigned char params[0x440] = {0};
-  param_u64(params, 0x408, 0x38);
-  param_u64(params, 0x410, 0x18);
-  param_u32(params, 0x41c, 2);
-  param_u32(params, 0x420, format);
-  param_u32(params, 0x424, width == 2560 ? 11 : 12);
-  param_u64(params, 0x428, 0x10);
-  param_u32(params, 0x430, 128000);
+  pbs_ps5_audio_request(params+0x408,capture_feature,format);
   if (pbs_inject_write(ctx, params, sizeof params)) return -1;
   long rc = capture_call_fast(ctx, open_fn, (uint64_t[6]){
       (uint64_t)ctx->scratch + 0x400, (uint64_t)ctx->scratch + 0x408, 0, 0, 0, 0});
-  fprintf(f, "Audio OpenAudio(format=%u) -> %s%s\n", format, fmt_rc(rc), ctx->asserted ? " [ASSERT]" : "");
+  fprintf(f, "Audio OpenAudio(format=%u feature=%u) -> %s%s\n", format, capture_feature, fmt_rc(rc), ctx->asserted ? " [ASSERT]" : "");
   if (rc == LONG_MIN || (int32_t)(uint32_t)rc < 0 || ctx->asserted) return -1;
   ++capture_audio_unclosed;
   if (pbs_inject_read_at(ctx, ctx->scratch + 0x400, &audio->handle, sizeof audio->handle) || !audio->handle) {
@@ -288,7 +283,7 @@ static void pbs_audio_drain(FILE *f, pbs_inject_t *ctx, pbs_audio_t *audio, unsi
   }
 }
 
-static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int seconds, int port, int width, int height, int audio_mode) {
+static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int seconds, int port, int width, int height, unsigned capture_feature, int audio_mode) {
   if (seconds < 0 || seconds > 60) return -1;
   int serving = seconds == 0 || stress_live;
   int recover = 0;
@@ -308,7 +303,7 @@ static int capture_stream(FILE *f, pbs_inject_t *ctx, uint64_t handle, int secon
   if (requested_video_bitrate && !bitrate_after_start) set_video_bitrate(f, ctx, handle);
   pbs_audio_t audio;
   memset(&audio, 0, sizeof audio);
-  if (audio_mode == 2 && !pbs_audio_open(f, ctx, &audio, width, 0)) audio.publish = 1;
+  if (audio_mode == 2 && !pbs_audio_open(f, ctx, &audio, capture_feature, 0)) audio.publish = 1;
   long rc = capture_call_fast(ctx, start, (uint64_t[6]){handle, 0, 0, 0, 0, 0});
   fprintf(f, "Start() -> %s\n", fmt_rc(rc));
   if (serving && native_rate_config && requested_video_bitrate > 30000000 &&
@@ -897,7 +892,7 @@ avopen_retry:;
           (int32_t)(uint32_t)rc >= 0 && h) {
         owned_session_closed = 0;
         if (diagnostic_open_only) fprintf(f, "diagnostic open-only: closing handle without starting stream\n");
-        else if (argc > 6) capture_stream(f, &ctx, h, atoi(argv[6]), argc > 7 ? atoi(argv[7]) : 9999, width, height, audio_mode);
+        else if (argc > 6) capture_stream(f, &ctx, h, atoi(argv[6]), argc > 7 ? atoi(argv[7]) : 9999, width, height, capture_feature, audio_mode);
         intptr_t close_fn = pbs_resolve_in(ctx.pid, "libSceAvcap2.sprx", "sceAvcap2Close");
         if (close_fn && !ctx.asserted) {
           long close_rc = call(&ctx, close_fn, (uint64_t[6]){h, 0, 0, 0, 0, 0});

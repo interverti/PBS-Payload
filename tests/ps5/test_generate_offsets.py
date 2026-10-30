@@ -231,6 +231,43 @@ class GenerateOffsetsTests(unittest.TestCase):
         rendered = offsets.render_profile(0x04000042, result)
         self.assertEqual(rendered, (PROFILES / "400.c").read_text(encoding="utf-8"))
 
+    def test_510_scalar_header_requires_a_complete_matching_constructor(self):
+        import struct
+        image = bytearray(0x100000)
+        start = 0x100
+        code = bytearray(bytes.fromhex("48c7431098020000"))
+
+        def descriptor(constant, destination):
+            address = start + len(code)
+            code.extend(bytes.fromhex("c5f81005") + struct.pack("<i", constant-address-8))
+            code.extend(bytes.fromhex("c5f81183") + struct.pack("<I", destination))
+
+        descriptor(0x900, 0xa0)
+        descriptor(0x920, 0x1c0)
+        code.extend(bytes.fromhex("8983dc010000898be00100008993e4010000"))
+        code.extend(bytes.fromhex("48c7830802000088000000"))
+        code.extend(bytes.fromhex("48b9000000000200000048898b90020000c3"))
+        image[start:start+len(code)] = code
+        struct.pack_into("<QQ", image, 0x900, 0xd0, 0x20)
+        struct.pack_into("<QQ", image, 0x920, 0xe8, 0x40)
+        expected = offsets.read_profile_fields(PROFILES / "510.c")
+        native = offsets.constructor_layout(bytes(image), 0x298)
+        self.assertEqual(native.pop("constructor"), start)
+        self.assertEqual(native, {k:v for k,v in expected.items()
+                         if k not in ("open_video", "ipc_command", "size", "kind", "constructor")})
+        # A 6.02-sized image group cannot be smuggled into a 5.10 header.
+        struct.pack_into("<QQ", image, 0x920, 0xf8, 0x40)
+        with self.assertRaises(ValueError):
+            offsets.constructor_layout(bytes(image), 0x298)
+        struct.pack_into("<QQ", image, 0x920, 0xe8, 0x40)
+        # Two otherwise valid constructors must be rejected as ambiguous.
+        duplicate = bytearray(code)
+        for offset, constant in ((8,0x900),(24,0x920)):
+            struct.pack_into("<i", duplicate, offset+4, constant-(0x1800+offset)-8)
+        image[0x1800:0x1800+len(duplicate)] = duplicate
+        with self.assertRaises(ValueError):
+            offsets.constructor_layout(bytes(image), 0x298)
+
     def test_flat_archive_without_run_directory_reports_unknown_firmware(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -259,6 +296,9 @@ class GenerateOffsetsTests(unittest.TestCase):
             0x04000042: (0x340, 0x3ac5, 0x230, 0x100, 0x1b7f13,
                          0x90, 0x68, 0x20, 0x148, 0xe8, 0x40,
                          0x168, 0x16c, 0x190, 0x218, 0x21c),
+            0x05100023: (0x350, 0x3d35, 0x298, 0x168, 0x472ad,
+                         0x90, 0xd0, 0x20, 0x1b0, 0xe8, 0x40,
+                         0x1d0, 0x1d4, 0x1f8, 0x280, 0x284),
             0x06020004: (0x340, 0x3e15, 0x2a8, 0x168, 0x4a03a,
                          0x90, 0xd0, 0x20, 0x1b0, 0xf8, 0x40, 0x1d0,
                          0x1d4, 0x1f8, 0x280, 0x284),
@@ -279,6 +319,7 @@ class GenerateOffsetsTests(unittest.TestCase):
             archive_name = {
                 0x03200004: "fw3.20.zip",
                 0x04000042: "fw4.00.7z",
+                0x05100023: "fw5.10.zip",
                 0x06020004: "fw6.02.zip",
                 0x07200005: "fw7.20.zip",
                 0x08400005: "FW-8.40.zip",
@@ -309,7 +350,7 @@ class GenerateOffsetsTests(unittest.TestCase):
                       n["image_paste"], n["video_mode"], n["mask_mode"])
             self.assertEqual(actual, values[4:])
             self.assertEqual(n.get("mask_span", 0x24),
-                             0x14 if fw in (0x03200004, 0x04000042) else 0x24)
+                             0x14 if fw in (0x03200004, 0x04000042, 0x05100023) else 0x24)
 
 
 if __name__ == "__main__":

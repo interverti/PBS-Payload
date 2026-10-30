@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-informational?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-PS5%20%7C%20PS4-blueviolet?style=flat-square)](#-supported-firmware)
 [![Version](https://img.shields.io/badge/version-0.2.0-blue?style=flat-square)](VERSION)
-[![Firmware](https://img.shields.io/badge/PS5%20profiles-20%20measured-brightgreen?style=flat-square)](docs/PS5_FIRMWARE_OFFSETS.txt)
+[![Firmware](https://img.shields.io/badge/PS5%20profiles-21%20measured-brightgreen?style=flat-square)](docs/PS5_FIRMWARE_OFFSETS.txt)
 
 <br/>
 
@@ -70,7 +70,7 @@ Design rules
 | **Transport** | HTTP MJPEG (`/frames`), RTP packetization for external players, capture restart and discontinuity handling |
 | **Viewer** | Built-in browser UI: live stats, resolution switching, forced keyframe, recording, download |
 | **Recording** | Writes an H.264 file on the console, served back from `/recordings/` |
-| **Firmware** | 20 measured PS5 profiles plus audited family ranges; PS4 runtime layout discovery |
+| **Firmware** | 21 measured PS5 profiles plus audited family ranges; PS4 runtime layout discovery |
 | **Diagnostics** | Offset, dependency and module dump payloads that produce the next firmware profile |
 | **Reliability** | Port fallback (ten candidates), RTP backlog resync with keyframe request, periodic keyframe refresh |
 
@@ -91,6 +91,7 @@ Each row was disassembled from a dump of that firmware: the request geometry fro
 | 3.20 | `0x03200004` | `0x218` | `0xe8` |
 | 4.00 | `0x04000042` | `0x230` | `0x100` |
 | 4.51 | `0x04510001` | `0x230` | `0x100` |
+| 5.10 | `0x05100023` | `0x298` | `0x168` |
 | 6.02 | `0x06020004` | `0x2a8` | `0x168` |
 | 7.20 | `0x07200005` | `0x2a8` | `0x168` |
 | 8.40 | `0x08400005` | `0x2a8` | `0x168` |
@@ -109,7 +110,7 @@ Each row was disassembled from a dump of that firmware: the request geometry fro
 | 13.42 | `0x13420000` | `0x2e8` | `0x1a8` |
 | 13.60 | `0x13600007` | `0x2e8` | `0x1a8` |
 
-Six of them are **exact-only** (3.20, 4.00, 4.51, 11.20, 13.00, 13.20): another
+Seven of them are **exact-only** (3.20, 4.00, 4.51, 5.10, 11.20, 13.00, 13.20): another
 build revision of the same release is refused instead of being served with a
 geometry it was never measured on.
 
@@ -142,7 +143,7 @@ release.
 
 If your console reports one of these, the payload refuses to patch rather than
 risk a wrong request size. Run the dump build and open an issue with the
-archive — that is exactly how 3.20, 4.00, 4.51, 11.20, 13.00, 13.20, 13.42 and
+archive — that is exactly how 3.20, 4.00, 4.51, 5.10, 11.20, 13.00, 13.20, 13.42 and
 the other profiles were added.
 
 ### PS4
@@ -161,7 +162,9 @@ Deeper detail: [`docs/PS4_FIRMWARE_OFFSETS.txt`](docs/PS4_FIRMWARE_OFFSETS.txt),
 ## Usage
 
 Load `pbs.elf` with your payload loader. With no arguments the stream starts on
-port 9999 at 2560×1440:
+port 9999 at 2560×1440 on modern profiles. The measured 3.20, 4.00, 4.51 and
+5.10 builds start at 1920×1080 and offer 720p, 1080p and 2160p: their native
+resolution table has no 1440p entry.
 
 ```
 pbs.elf avserve [720p|1080p|1440p|2160p] [bitrate=N] [minqp=N] [norate]

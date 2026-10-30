@@ -16,7 +16,7 @@ int main(void) {
   assert(fw400->remoteplay.width_offset==0x168u && fw400->remoteplay.height_offset==0x16cu);
   /* Exact entries must win even when another profile describes the family. */
   static const uint32_t exact[][2] = {
-    {0x04000042,0x230}, {0x04510001,0x230}, {0x12400009,0x2e0},
+    {0x04000042,0x230}, {0x04510001,0x230}, {0x05100023,0x298}, {0x12400009,0x2e0},
     {0x03200004,0x218}, {0x06020004,0x2a8}, {0x07200005,0x2a8},
     {0x08400005,0x2a8}, {0x09200005,0x2b0}, {0x09400008,0x2b0},
     {0x10010000,0x2b8}, {0x10600006,0x2b8}, {0x11200005,0x2e0},
@@ -87,6 +87,17 @@ int main(void) {
   /* 4.51 repeats the same geometry and has its own exact dump/firmware ID. */
   check(0x04510001,0x04510001,0x230);
   check(0x04510000,0,0);
+  /* 5.10 has its own intermediate geometry, not 4.51 or 6.02's ABI. */
+  check(0x05100022,0,0);
+  check(0x05100024,0,0);
+  check(0x05000023,0,0);
+  check(0x05500023,0,0);
+  const pbs_ps5_offset_profile *fw510=pbs_ps5_find_offsets(0x05100023u);
+  assert(fw510 && fw510->avcap2.open_video_rva==0x350u);
+  assert(fw510->avcap2.ipc_command_instruction_rva==0x3d35u);
+  assert(fw510->remoteplay.request_size_store_rva==0x472adu);
+  assert(fw510->remoteplay.image.size==0xe8u);
+  assert(fw510->remoteplay.mask_mode_offset+fw510->remoteplay.mask_span==fw510->avcap2.request_size);
   puts("PASS: exact profile precedence, family interiors, build revisions, endpoints and gaps");
   return 0;
 }

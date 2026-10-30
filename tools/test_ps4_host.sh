@@ -16,6 +16,7 @@ run() {
 run firmware tests/ps4/system/firmware.c
 run ps5-capture-cleanup tests/ps5/capture_cleanup.c
 run ps5-capture-resolution tests/ps5/capture_resolution.c
+run ps5-capture-audio tests/ps5/capture_audio_request.c
 run problem-log tests/common/problem_log.c payload/src/common/diagnostics/problem_log.c
 run offset-report tests/ps4/dump/offset_report.c tools/dump/ps4/offset_report.c
 run kernel-image tests/ps4/dump/kernel_image.c tools/dump/ps4/kernel_image.c
