@@ -38,10 +38,31 @@ assert.ok(['127.0.0.1','localhost'].includes(new URL(endpoint).hostname),'browse
    await page.locator('#close-preview').click();await page.waitForFunction(()=>!viewerPaused&&!document.getElementById('video').paused);
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no horizontal overflow');
    await page.screenshot({path:path.join(out,mobile?'issues-mobile.png':'issues-desktop.png'),fullPage:true});
-   page.once('dialog',d=>d.accept());await page.locator('.recording-card button').filter({hasText:'Delete'}).first().click();
+   await page.evaluate(()=>{
+    window.confirm=()=>{throw new Error('Blocking confirmation must not interrupt live PCM');};
+    window.pbsAudio.set({muted:false});
+   });
+   await page.waitForFunction(()=>audioOn&&audioCtx.state==='running');
+   await page.evaluate(()=>{
+    window.audioCallbacks=0;const process=audioSource.onaudioprocess;
+    audioSource.onaudioprocess=e=>{window.audioCallbacks++;process(e);};
+   });
+   for(const cancel of [true,false]){
+    await page.locator('.recording-card button').filter({hasText:'Delete'}).first().click();
+    await page.waitForFunction(()=>document.getElementById('delete-dialog').open);
+    const before=await page.evaluate(()=>({audio:window.audioCallbacks,video:document.getElementById('video').currentTime}));
+    await page.waitForTimeout(700);
+    const after=await page.evaluate(()=>({audio:window.audioCallbacks,video:document.getElementById('video').currentTime}));
+    assert.ok(after.audio>before.audio,'PCM processing continues while confirmation is open');
+    assert.ok(after.video>before.video,'live video continues while confirmation is open');
+    await page.locator('#delete-dialog button').filter({hasText:cancel?'Cancel':'Delete recording'}).click();
+    await page.waitForFunction(()=>!document.getElementById('delete-dialog').open);
+    if(cancel)assert.equal(await page.locator('.recording-card').count(),1,'cancel preserves the recording');
+   }
    await page.waitForFunction(()=>document.getElementById('recordings').textContent==='No recordings yet');
    assert.deepEqual(errors,[]);
-   console.log('PASS production HTTP + Chrome',mobile?'mobile':'desktop','resolution controls/rollback, storage selection, recording, snapshot, bounded H264 preview, restore live and deletion');
+   assert.equal(await page.evaluate(()=>audioOn&&audioCtx.state==='running'),true,'deleting preserves live audio');
+   console.log('PASS production HTTP + Chrome',mobile?'mobile':'desktop','resolution controls/rollback, storage selection, recording, snapshot, bounded H264 preview, restore live, deletion/cancel with continuous PCM');
    await page.close();
   }
  }finally{await browser.close();}
