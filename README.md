@@ -70,7 +70,7 @@ Design rules
 | **Transport** | HTTP MJPEG (`/frames`), RTP packetization for external players, capture restart and discontinuity handling |
 | **Viewer** | Built-in browser UI: live stats, resolution switching, forced keyframe, recording, download |
 | **Recording** | Writes an H.264 file on the console, served back from `/recordings/` |
-| **Firmware** | 21 measured PS5 profiles plus audited family ranges; PS4 runtime layout discovery |
+| **Firmware** | 24 measured PS5 profiles plus audited family ranges; PS4 runtime layout discovery |
 | **Diagnostics** | Offset, dependency and module dump payloads that produce the next firmware profile |
 | **Reliability** | Port fallback (ten candidates), RTP backlog resync with keyframe request, periodic keyframe refresh |
 
@@ -91,12 +91,15 @@ Each row was disassembled from a dump of that firmware: the request geometry fro
 | 3.20 | `0x03200004` | `0x218` | `0xe8` |
 | 4.00 | `0x04000042` | `0x230` | `0x100` |
 | 4.51 | `0x04510001` | `0x230` | `0x100` |
+| 5.00 | `0x05000040` | `0x298` | `0x168` |
 | 5.10 | `0x05100023` | `0x298` | `0x168` |
+| 5.50 | `0x05500008` | `0x298` | `0x168` |
 | 6.02 | `0x06020004` | `0x2a8` | `0x168` |
 | 7.20 | `0x07200005` | `0x2a8` | `0x168` |
 | 8.40 | `0x08400005` | `0x2a8` | `0x168` |
 | 9.20 | `0x09200005` | `0x2b0` | `0x168` |
 | 9.40 | `0x09400008` | `0x2b0` | `0x168` |
+| 9.60 | `0x09600004` | `0x2b0` | `0x168` |
 | 10.01 | `0x10010000` | `0x2b8` | `0x188` |
 | 10.60 | `0x10600006` | `0x2b8` | `0x188` |
 | 11.20 | `0x11200005` | `0x2e0` | `0x1a0` |
@@ -110,7 +113,7 @@ Each row was disassembled from a dump of that firmware: the request geometry fro
 | 13.42 | `0x13420000` | `0x2e8` | `0x1a8` |
 | 13.60 | `0x13600007` | `0x2e8` | `0x1a8` |
 
-Seven of them are **exact-only** (3.20, 4.00, 4.51, 5.10, 11.20, 13.00, 13.20): another
+Ten of them are **exact-only** (3.20, 4.00, 4.51, 5.00, 5.10, 5.50, 9.60, 11.20, 13.00, 13.20): another
 build revision of the same release is refused instead of being served with a
 geometry it was never measured on.
 
@@ -136,7 +139,6 @@ release.
 | Release | Why it is refused | What it needs |
 | --- | --- | --- |
 | 9.00 | lies outside the 9.20–9.40 family | dump of `libSceAvcap2` + `SceRemotePlay` |
-| 9.60 | past the end of the 9.20–9.40 family | dump |
 | 11.00 | sits between the 10.01–10.60 geometry (`0x2b8`) and the measured 11.20 build (`0x2e0`) | dump |
 | 14.00 | beyond the last audited family (13.40–13.60) | dump |
 | 14.10 | beyond the last audited family (13.40–13.60) | dump |

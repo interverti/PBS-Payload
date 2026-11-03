@@ -283,6 +283,35 @@ class GenerateOffsetsTests(unittest.TestCase):
             self.assertIn("firmware ID unknown", result.stdout)
             self.assertEqual([p.name for p in out.glob("*.c")], ["registry.c"])
 
+    def test_new_500_550_960_profiles_match_independent_dumps(self):
+        dumps = os.environ.get("PBS_PS5_DUMPS")
+        if not dumps:
+            self.skipTest("set PBS_PS5_DUMPS to test against real firmware memory")
+        for firmware, archive, stem in ((0x05000040, "pbs_5.00.zip", "500"),
+                                        (0x05500008, "5.50.pbs.zip", "550"),
+                                        (0x09600004, "fw9.60.rar", "960")):
+            with self.subTest(firmware=hex(firmware)):
+                members = offsets.load_members(Path(dumps) / archive,
+                    os.environ.get("PBS_SEVEN_ZIP", "7z"))
+                entries = {n: b for n, b in members.items() if f"ps5-{firmware:08x}-" in n}
+                avcap = [offsets.avcap_layout(b) for n, b in entries.items()
+                         if n.endswith(offsets.MODULE)]
+                self.assertTrue(avcap)
+                self.assertTrue(all(a == avcap[0] for a in avcap))
+                layouts = []
+                for name, data in entries.items():
+                    if not name.endswith(offsets.EBOOT):
+                        continue
+                    try:
+                        native = offsets.constructor_layout(data, avcap[0]["size"])
+                    except ValueError:
+                        continue
+                    layouts.append(avcap[0] | native | {"mask_span": native.get("mask_span", 0x24)})
+                self.assertTrue(layouts)
+                expected = offsets.read_profile_fields(PROFILES / (stem + ".c"))
+                for layout in layouts:
+                    self.assertEqual(layout, expected)
+
     def test_real_legacy_layouts_when_dumps_provided(self):
         dumps = os.environ.get("PBS_PS5_DUMPS")
         if not dumps:

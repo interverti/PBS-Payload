@@ -38,6 +38,21 @@
       "notes": "Same request geometry and normalized code RVAs as 4.00: open_video 0x340, IPC 0x3ac5, size store 0x1b7f13; request 0x230 and kind 0x100. The raw 4.00 code prefixes require +1 origin normalization. Both native backends use resolution 5 for 2160p and lack 1440p. Exact-only: another 4.51 build is refused"
     },
     {
+      "release": "5.00",
+      "firmware": "0x05000040",
+      "profile": "500",
+      "status": "exact",
+      "expected": {
+        "request_size": "0x298",
+        "kind_offset": "0x168",
+        "native_size_store_rva": "0x472ad"
+      },
+      "source": "pbs_5.00.zip",
+      "sha256": "69A4BAAF2163AFE6E945D338F25127A4B5F97925491C554A0A42C8D305C0A16B",
+      "evidence": "Measured independently from decrypted Avcap2 and RemotePlay memory prefixes; audit 2026-11-03, build/firmware-audit-20261103/firmware-audit.json.",
+      "notes": "Exact-only: other build revisions are refused. Hardware capture not tested for this firmware. Legacy backend tables at 0x21964/0x2197c: 2160p enum 5, no 1440p; short 0x14-byte mask tail."
+    },
+    {
       "release": "5.10",
       "firmware": "0x05100023",
       "profile": "510",
@@ -51,6 +66,21 @@
       "sha256": "A3B4A5B46B29F8CA1E5A5281A6D9C985F7F2C8C3C5C1450B1AD99959ABD09BEA",
       "evidence": "2026-10-30 dump of firmware 0x05100023: SceRemotePlay pid 59 Avcap2 and EBOOT prefixes, both missing_pages=0. OpenVideo 0x350, IPC 0x3d35 copies 0x298 bytes; native RBX+0x10 header at 0x472ad agrees. SceAvCapture pid 58 provides the legacy six-entry resolution table at 0x21964. See docs/PS5_FW510_PROFILE.md.",
       "notes": "Exact-only: another 5.10 build is refused. Rate 0x90/0xd0, image 0x1b0/0xe8, width/height 0x1d0/0x1d4, mask 0x284 with 0x14-byte span. Legacy resolution mapping: 2160p=5, no 1440p; automatic startup 1080p. Not inherited from 4.51 or 6.02; runtime capture validation pending."
+    },
+    {
+      "release": "5.50",
+      "firmware": "0x05500008",
+      "profile": "550",
+      "status": "exact",
+      "expected": {
+        "request_size": "0x298",
+        "kind_offset": "0x168",
+        "native_size_store_rva": "0x472ad"
+      },
+      "source": "5.50.pbs.zip",
+      "sha256": "1CD2E36EA128224BC748F2B312D8BACAE931807ED46AFB7BE2FB101CFAF04614",
+      "evidence": "Measured independently from decrypted Avcap2 and RemotePlay memory prefixes; audit 2026-11-03, build/firmware-audit-20261103/firmware-audit.json.",
+      "notes": "Exact-only: other build revisions are refused. Hardware capture not tested for this firmware. Legacy backend tables at 0x21964/0x2197c: 2160p enum 5, no 1440p; short 0x14-byte mask tail."
     },
     {
       "release": "6.02",
@@ -93,6 +123,21 @@
       "expected": {"request_size": "0x2b0", "kind_offset": "0x168", "native_size_store_rva": "0x4da1d"},
       "source": "fw9.40.zip",
       "notes": "Complete 2026-10-30 dump: native RemotePlay constructor measured at 0x4da1d; request geometry and focused Avcap2/RemotePlay instruction spans match 9.20. This is static ABI evidence, not hardware validation at 120 Hz."
+    },
+    {
+      "release": "9.60",
+      "firmware": "0x09600004",
+      "profile": "960",
+      "status": "exact",
+      "expected": {
+        "request_size": "0x2b0",
+        "kind_offset": "0x168",
+        "native_size_store_rva": "0x4da1d"
+      },
+      "source": "fw9.60.rar",
+      "sha256": "CB9FDD91EDCF5A3BF7D46CE8F4F4672EE23CDCBA56FF1F5C0AA3403AFF8DFBF9",
+      "evidence": "Measured independently from decrypted Avcap2 and RemotePlay memory prefixes; audit 2026-11-03, build/firmware-audit-20261103/firmware-audit.json.",
+      "notes": "Exact-only: other build revisions are refused. Hardware capture not tested for this firmware. Same request geometry as 9.20/9.40; the existing family range is not extended."
     },
     {
       "release": "10.01",
@@ -195,14 +240,6 @@
       "firmware": "0x09000000",
       "status": "unmeasured",
       "reason": "no dump; the 9.20-9.40 family does not cover 9.00 and its geometry is unknown",
-      "candidates": ["920"],
-      "missing": ["libSceAvcap2.sprx.prefix.bin", "SceRemotePlay eboot.bin.prefix.bin"]
-    },
-    {
-      "release": "9.60",
-      "firmware": "0x09600000",
-      "status": "unmeasured",
-      "reason": "no dump; the audited 9.20-9.40 family ends at 9.40",
       "candidates": ["920"],
       "missing": ["libSceAvcap2.sprx.prefix.bin", "SceRemotePlay eboot.bin.prefix.bin"]
     },

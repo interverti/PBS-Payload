@@ -17,6 +17,7 @@ int main(void) {
   /* Exact entries must win even when another profile describes the family. */
   static const uint32_t exact[][2] = {
     {0x04000042,0x230}, {0x04510001,0x230}, {0x05100023,0x298}, {0x12400009,0x2e0},
+    {0x05000040,0x298}, {0x05500008,0x298}, {0x09600004,0x2b0},
     {0x03200004,0x218}, {0x06020004,0x2a8}, {0x07200005,0x2a8},
     {0x08400005,0x2a8}, {0x09200005,0x2b0}, {0x09400008,0x2b0},
     {0x10010000,0x2b8}, {0x10600006,0x2b8}, {0x11200005,0x2e0},
@@ -92,6 +93,12 @@ int main(void) {
   check(0x05100024,0,0);
   check(0x05000023,0,0);
   check(0x05500023,0,0);
+  check(0x0500003f,0,0);
+  check(0x05000041,0,0);
+  check(0x05500007,0,0);
+  check(0x05500009,0,0);
+  check(0x09600003,0,0);
+  check(0x09600005,0,0);
   const pbs_ps5_offset_profile *fw510=pbs_ps5_find_offsets(0x05100023u);
   assert(fw510 && fw510->avcap2.open_video_rva==0x350u);
   assert(fw510->avcap2.ipc_command_instruction_rva==0x3d35u);

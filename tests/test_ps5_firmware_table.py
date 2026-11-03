@@ -42,6 +42,14 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(self.profiles[name]["firmware"], firmware, name)
             self.assertEqual(self.registry["exact"][firmware], name, name)
 
+    def test_new_measured_profiles_refuse_other_build_revisions(self):
+        for firmware, name in ((0x05000040, "500"), (0x05500008, "550"),
+                                (0x09600004, "960")):
+            self.assertEqual(ledger.select(firmware, self.registry), (name, "exact"))
+            for other in (firmware - 1, firmware + 1, firmware & 0xffff0000):
+                self.assertIsNone(ledger.select(other, self.registry)[0])
+        self.assertEqual(ledger.select(0x09400009, self.registry), ("920", "family-range"))
+
     def test_1300_is_exact_only_while_other_1342_builds_reuse_the_family(self):
         self.assertEqual(ledger.select(0x13000040, self.registry), ("1300", "exact"))
         self.assertEqual(ledger.select(0x13000041, self.registry), (None, "not-catalogued"))
@@ -110,8 +118,8 @@ class LedgerTests(unittest.TestCase):
     def test_cli_check_list_and_markdown(self):
         base = [sys.executable, str(TOOLS / "ps5_firmware_table.py")]
         checked = subprocess.run(base + ["--check"], check=True, capture_output=True, text=True)
-        self.assertIn("21 profiles", checked.stdout)
-        self.assertIn("5 refused releases", checked.stdout)
+        self.assertIn("24 profiles", checked.stdout)
+        self.assertIn("4 refused releases", checked.stdout)
 
         listing = subprocess.run(base + ["--list"], check=True, capture_output=True, text=True)
         self.assertIn("0x13000040", listing.stdout)

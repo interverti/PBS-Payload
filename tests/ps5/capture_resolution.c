@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 int main(void) {
-  const uint32_t legacy[]={0x03200004u,0x04000042u,0x04510001u,0x05100023u};
+  const uint32_t legacy[]={0x03200004u,0x04000042u,0x04510001u,0x05000040u,0x05100023u,0x05500008u};
   const uint32_t modern[]={0x06020004u,0x09400008u,0x12400009u,0x13600007u};
   uint32_t mode;
   for (unsigned i=0;i<sizeof legacy/sizeof *legacy;i++) {
