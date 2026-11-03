@@ -5,7 +5,7 @@ const vm=require('node:vm');
 const managedOnly=process.argv.includes('--managed');
 const html=fs.readFileSync(require('node:path').join(__dirname,'../../payload/web/h264.html'),'utf8');
 const scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
-assert.equal(scripts.length,3);
+assert.equal(scripts.length,4);
 let now=1000,frameConnections=0,opened=0,closed=0,lastSource=null;
 let deliverFrame=null,removed=[],fragmentTimes=[],fragmentDurations=[],cancelledCallbacks=0,keyRequests=0;
 const timers=new Map();

@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+const assert=require('node:assert/strict');
+const fs=require('node:fs'),vm=require('node:vm');
+vm.runInThisContext(fs.readFileSync(require('node:path').join(__dirname,'../../payload/web/controller.js'),'utf8'));
+const {neutral,stateFor,encode}=globalThis.PBSController;
+assert.deepEqual(neutral(),{buttons:0,lx:128,ly:128,rx:128,ry:128,l2:0,r2:0});
+assert.deepEqual(stateFor(null),neutral());
+const pad={connected:true,mapping:'standard',axes:[-1,1,0.05,NaN],buttons:Array.from({length:18},()=>({pressed:false,value:0}))};
+pad.buttons[0]={pressed:true,value:1};pad.buttons[6]={pressed:true,value:0.5};
+let state=stateFor(pad);
+assert.equal(state.buttons,0x4100);assert.equal(state.lx,0);assert.equal(state.ly,255);
+assert.equal(state.rx,128);assert.equal(state.ry,128);assert.equal(state.l2,128);
+state=stateFor(pad,new Set(['KeyA','KeyD','KeyW','KeyF','KeyP','ArrowLeft']));
+assert.equal(state.lx,128);assert.equal(state.ly,0);assert.equal(state.r2,255);
+assert.equal(state.buttons&0x20000,0x20000);assert.equal(state.buttons&0x80,0x80);
+assert.deepEqual(stateFor({...pad,mapping:'unknown'}),neutral());
+assert.deepEqual(stateFor({...pad,connected:false}),neutral());
+assert.equal(encode(0xffffffff,neutral()),'4294967295,0,128,128,128,128,0,0');
+assert.equal(encode(0x100000000,neutral()),'0,0,128,128,128,128,0,0');
+console.log('Controller gamepad/keyboard mapping, neutral state and protocol encoding verified');

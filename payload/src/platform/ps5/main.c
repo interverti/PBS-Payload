@@ -29,6 +29,7 @@
 #include "platform/ps5/offset_dump.h"
 #include "platform/ps5/offset/profile.h"
 #include "platform/ps5/module_dump.h"
+#include "platform/ps5/controller.h"
 
 
 
@@ -484,7 +485,7 @@ static int release_capture_step(void *opaque,pbs_ps5_release_step step) {
 /* Production entry point: exported capture APIs and caller-owned handles. */
 int main(int argc, char **argv) {
   const char *mode = argc > 1 ? argv[1] : "avserve";
-  if (strcmp(mode, "avserve")) { notify("PBS: use avserve [720p|1080p|1440p|2160p] [bitrate=N] [minqp=N] [norate] [offsetdump] [dependencydump] [moduledump] [noaudio] [port]"); return 1; }
+  if (strcmp(mode, "avserve")) { notify("PBS: use avserve [720p|1080p|1440p|2160p] [bitrate=N] [minqp=N] [norate] [offsetdump] [dependencydump] [moduledump] [noaudio] [nocontroller] [port]"); return 1; }
   char *serve_args[] = {argv[0], "avopenfast", "SceRemotePlay", "grant", "11", "2", "0", "9999", "2560", "1440", "1"};
 #if defined(PBS_PS5_DEFAULT_1080P)
   serve_args[4] = "12"; serve_args[8] = "1920"; serve_args[9] = "1080";
@@ -499,6 +500,7 @@ int main(int argc, char **argv) {
   int dependency_dumped = 0;
   int module_file_dump = 0;
   int diagnostic_open_only = 0;
+  int controller_enabled = PBS_PS5_CONTROLLER;
 #ifdef PBS_PS5_OFFSET_DUMP_DEFAULT
   offset_dump = 1;
 #endif
@@ -540,6 +542,8 @@ int main(int argc, char **argv) {
         dependency_dump = 1;
       } else if (!strcmp(argv[i], "moduledump")) {
         module_file_dump = 1;
+      } else if (!strcmp(argv[i], "nocontroller")) {
+        controller_enabled = 0;
       }
     }
     requested_video_budget = requested_video_bitrate;
@@ -551,6 +555,7 @@ int main(int argc, char **argv) {
       if (!strcmp(argv[i], "offsetdump")) continue;
       if (!strcmp(argv[i], "dependencydump")) continue;
       if (!strcmp(argv[i], "moduledump")) continue;
+      if (!strcmp(argv[i], "nocontroller")) continue;
       if (!strcmp(argv[i], "noaudio")) { audio_mode = 0; continue; }
       if (!strcmp(argv[i], "720p")) { automatic_resolution = 0; serve_args[4] = "12"; serve_args[8] = "1280"; serve_args[9] = "720"; continue; }
       if (!strcmp(argv[i], "1080p")) { automatic_resolution = 0; serve_args[4] = "12"; serve_args[8] = "1920"; serve_args[9] = "1080"; continue; }
@@ -573,6 +578,8 @@ int main(int argc, char **argv) {
     uint32_t firmware = kernel_get_fw_version();
     fprintf(startup_report, "PBS startup firmware=0x%08x capture_profile=%s\n",
             firmware, pbs_ps5_find_offsets(firmware) ? "available" : "missing");
+    fprintf(startup_report, "Controller compiled=%d enabled=%d\n",
+            PBS_PS5_CONTROLLER, controller_enabled);
     fclose(startup_report);
   }
   if (module_file_dump) {
@@ -595,6 +602,9 @@ int main(int argc, char **argv) {
       return 1;
     }
     const pbs_ps5_avcap2_offsets *avcap = &layout->avcap2;
+    if (controller_enabled) {
+      pbs_ps5_controller_configure();
+    }
     const pbs_ps5_remoteplay_offsets *rp = &layout->remoteplay;
     /* FW4.00 ends its request after the short 0x14-byte mask descriptor. */
     const uint32_t mask_span = rp->mask_span ? rp->mask_span : 0x24;

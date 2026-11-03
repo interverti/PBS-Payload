@@ -12,6 +12,10 @@ esac
 # The owner's banner is branding, not code: opt in, otherwise it is not
 # embedded and /banner.png answers 404 (no logo in the viewer).
 web_logo=${PBS_WEB_LOGO:-0}
+ps5_controller=${PBS_PS5_CONTROLLER:-1}
+if [[ $ps5_controller != 0 && $ps5_controller != 1 ]]; then
+  echo 'PBS_PS5_CONTROLLER must be 0 or 1 (default 1)' >&2; exit 2
+fi
 if [[ $web_logo != 0 && $web_logo != 1 ]]; then
   echo 'PBS_WEB_LOGO must be 0 or 1 (1 embeds web/banner.png, default 0)' >&2; exit 2
 fi
@@ -217,7 +221,7 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
       sources+=("$root/src/platform/ps4/capture/remote.c" "$root/src/platform/ps4/worker/client.c" "$root/src/platform/ps4/worker/remote.c" "$root/src/platform/ps4/worker/boot.c")
       if [[ $worker_boot == 1 ]]; then sources+=("$root/src/platform/ps4/capture/export_reader.c"); fi
     fi
-    sources+=("$root/src/platform/ps4/system/control.c" "$root/src/common/process/inject.c" "$root/src/common/http/server.c" "$root/src/common/diagnostics/problem_log.c" "$root/src/platform/ps4/system/credentials.c")
+    sources+=("$root/src/platform/ps4/system/control.c" "$root/src/common/process/inject.c" "$root/src/common/http/server.c" "$root/src/common/input/controller.c" "$root/src/common/diagnostics/problem_log.c" "$root/src/platform/ps4/system/credentials.c")
     if [[ $dynamic_layout == 1 ]]; then sources+=("$root/src/platform/ps4/system/layout.c" "$root/src/platform/ps4/system/layout_runtime.c"); fi
     if [[ $admission_probe == 1 || $low_memory == 1 || $encoder_state == 1 ]]; then
       sources+=("$root/src/platform/ps4/diagnostics/snapshot.c" "$root/src/platform/ps4/diagnostics/admission.c")
@@ -228,11 +232,14 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
   else
     sources=("$root/src/platform/ps5/main.c" "$root/src/platform/ps5/offset_dump.c"
       "$root/src/platform/ps5/module_dump.c" "$root/src/common/process/inject.c"
-      "$root/src/common/http/server.c")
+      "$root/src/common/http/server.c" "$root/src/common/input/controller.c")
     for offset_source in "$root"/src/platform/ps5/offset/*.c; do
       sources+=("$offset_source")
     done
-    defines=()
+    defines=("-DPBS_PS5_CONTROLLER=$ps5_controller")
+    if [[ $ps5_controller == 1 ]]; then
+      sources+=("$root/src/platform/ps5/controller.c")
+    fi
   fi
   filename=pbs.elf
   if [[ $platform == ps4 && $kind == stream && $remote_avcap == 1 ]]; then

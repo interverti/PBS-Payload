@@ -170,7 +170,7 @@ resolution table has no 1440p entry.
 
 ```
 pbs.elf avserve [720p|1080p|1440p|2160p] [bitrate=N] [minqp=N] [norate]
-                [offsetdump] [dependencydump] [moduledump] [noaudio] [port]
+                [offsetdump] [dependencydump] [moduledump] [noaudio] [nocontroller] [port]
 ```
 
 Open `http://<console-ip>:9999/` in a browser on the same network. Audio starts
@@ -227,6 +227,42 @@ initial profile. Offline regression runs on the host with
 
 These endpoints are unauthenticated local-network services. Use a trusted LAN and
 never expose the console to the Internet.
+
+## PS5 remote controller
+
+The embedded viewer provides **Connect controller** for the PS5 firmware profiles
+already supported by the payload. Connect explicitly, then choose a PS5 user if
+the console asks. Click the controller area to use its displayed keyboard bindings,
+use a standard browser gamepad, or hold the right mouse button over the video to
+move the right stick. Only one viewer owns a controller at a time. Disconnect it
+with **Disconnect controller** before leaving the session.
+
+Streaming and controller input are included in the same `pbs.elf` by default.
+Pass `nocontroller` at launch (`pbs.elf avserve nocontroller`) to disable input
+for that session. To exclude the native controller backend at build time, use
+`-Ps5Controller 0` with `payload/build.ps1`, or `PBS_PS5_CONTROLLER=0` with
+`payload/build.sh ps5`. The default is 1 in both build scripts. With input disabled,
+the viewer hides the controller section and registration is unavailable.
+
+Input is released after 250 ms without updates; after two seconds the virtual
+device is removed. Losing focus sends neutral input. Video profile changes keep
+the controller session. Basic buttons, sticks and triggers are implemented;
+touch coordinates, motion and feedback are not. This feature is PS5 only.
+
+The backend resolves native `libScePad` exports locally and uses the existing
+firmware selector. Offline tests cover all 24 measured profile IDs, framing,
+session ownership, browser focus loss and cleanup failures. Hardware validation
+on each firmware remains pending. API availability is checked when connecting;
+failure stops the operation. The diagnostic log is `/data/pbs/controller.log`.
+
+For viewer integrations, `GET /input/status` reports availability and ownership
+without exposing a session token. `POST /input/connect` returns a token; send it
+in `X-PBS-Controller` for `/input/state` and `/input/disconnect`. All three POST
+routes require `X-PBS-Input: 1`. State bodies contain eight unsigned decimal CSV
+fields: `sequence,buttons,lx,ly,rx,ry,l2,r2`. Stick centres are 128, axes and
+triggers range from 0 to 255, and sequence numbers must advance modulo 2^32.
+Keep sending state at least every 100 ms while connected. A failed deletion
+blocks reconnection and is reported in status and the log.
 
 ## Known limits
 

@@ -24,6 +24,7 @@ generated = args.out or root / 'build/generated'
 generated.mkdir(parents=True, exist_ok=True)
 viewer = (root / 'web/h264.html').read_text(encoding='utf-8').replace(
     '/*PBS_MUX*/', (root / 'web/h264-mux.js').read_text(encoding='utf-8')).replace(
+    '/*PBS_CONTROLLER*/', (root / 'web/controller.js').read_text(encoding='utf-8').replace('</script', '<\\/script')).replace(
     '/*PBS_VIDEOJS*/', (root / 'web/vendor/videojs-player.js').read_text(encoding='utf-8').replace('</script', '<\\/script'))
 escaped = viewer.replace('\\', '\\\\').replace('"', '\\"').replace('\r', '').replace('\n', '\\n').replace('?', r'\?')
 (generated / 'webui.h').write_text(

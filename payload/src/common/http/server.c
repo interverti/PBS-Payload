@@ -148,6 +148,7 @@ static void profile_reply(int fd, int code, const char *message) {
   int h = snprintf(header, sizeof header, "HTTP/1.1 %d Profile\r\nContent-Type: application/json\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", code, n);
   send_all(fd, header, (size_t)h); send_all(fd, body, (size_t)n);
 }
+#include "common/http/controller_routes.h"
 static void select_profile(int fd, const char *path) {
   int height = 0, consumed = 0, code = 200;
   const char *message = "Resolution change requested";
@@ -315,6 +316,7 @@ void pbs_h264_server_stop(void) {
       shutdown(live.worker_fd[i], SHUT_RDWR);
   pthread_cond_broadcast(&live.changed);
   pthread_mutex_unlock(&live.lock);
+  pbs_input_stop();
 }
 static void stream(int fd) {
   HTTP_TRACE("stream entered\n");
@@ -655,6 +657,7 @@ static void *client_thread(void *arg) {
       send_all(fd, missing, sizeof missing - 1);
     }
   }
+  else if (!strncmp(path,"/input/",7)) input_route(fd,method,path,request,used);
   else if (!strcmp(method, "GET") && !strcmp(path, "/config.json")) configuration(fd);
   else if (!strcmp(method, "GET") && !strcmp(path, "/status.json")) status(fd);
   else if (!strcmp(method, "GET") && !strcmp(path, "/frames")) stream(fd);
@@ -741,6 +744,7 @@ static void *accept_thread(void *arg) {
   return NULL;
 }
 void pbs_h264_server_wait(void) {
+  pbs_input_wait();
   if (live.acceptor_valid) { pthread_join(live.acceptor, NULL); live.acceptor_valid = 0; }
   for (int i = 0; i < 16; ++i) {
     if (live.worker_valid[i]) { pthread_join(live.workers[i], NULL); live.worker_valid[i] = 0; }
@@ -805,5 +809,6 @@ int pbs_h264_server_start_at_rate(int port, int width, int height, int fps,
   memcpy(live.pps, pps, pps_len); live.pps_len = pps_len;
   if (pthread_create(&live.acceptor, NULL, accept_thread, NULL)) { live.running = 0; close(fd); live.listener = -1; return -1; }
   live.acceptor_valid = 1;
+  (void)pbs_input_start();
   return 0;
 }

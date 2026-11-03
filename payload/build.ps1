@@ -35,6 +35,7 @@ param(
   # Branding is opt-in so a default build carries no owner logo.
   [switch]$WebLogo,
   [switch]$Ps5NoNativeRateDefault,
+  [ValidateSet(0, 1)][int]$Ps5Controller = 1,
   [switch]$Ps5OffsetDumpDefault,
   [switch]$Ps5DependencyDumpDefault,
   [switch]$Ps5ModuleFileDumpDefault,
@@ -104,7 +105,11 @@ if ($Kind -eq 'stream') {
   $viewer = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'web\h264.html') -Raw -Encoding UTF8
   $muxer = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'web\h264-mux.js') -Raw -Encoding UTF8
   $viewer = $viewer.Replace('/*PBS_MUX*/', $muxer)
-  $escapedViewer = $viewer.Replace('\', '\\').Replace('"', '\"').Replace("`r", '').Replace("`n", '\n')
+  $controller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'web\controller.js') -Raw -Encoding UTF8
+  $viewer = $viewer.Replace('/*PBS_CONTROLLER*/', $controller.Replace('</script', '<\/script'))
+  $player = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'web\vendor\videojs-player.js') -Raw -Encoding UTF8
+  $viewer = $viewer.Replace('/*PBS_VIDEOJS*/', $player.Replace('</script', '<\/script'))
+  $escapedViewer = $viewer.Replace('\', '\\').Replace('"', '\"').Replace("`r", '').Replace("`n", '\n').Replace('?', '\?')
   $viewerHeader = '#pragma once' + "`n" + 'static const char PBS_H264_HTML[] = "' + $escapedViewer + '";' + "`n"
   [System.IO.File]::WriteAllText((Join-Path $generated 'webui.h'), $viewerHeader, [System.Text.UTF8Encoding]::new($false))
   if ($WebLogo) {
@@ -149,7 +154,10 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $sourceNames = if ($Kind -eq 'dump') {
   @('platform/ps5/module_dump.c', 'tools/dump/ps5/dump_main.c')
 } else {
-  @('platform/ps5/main.c', 'platform/ps5/offset_dump.c', 'platform/ps5/module_dump.c', 'common/process/inject.c', 'common/http/server.c')
+  @('platform/ps5/main.c', 'platform/ps5/offset_dump.c', 'platform/ps5/module_dump.c', 'common/process/inject.c', 'common/http/server.c', 'common/input/controller.c')
+}
+if ($Kind -eq 'stream' -and $Ps5Controller -eq 1) {
+  $sourceNames += 'platform/ps5/controller.c'
 }
 $sources = $sourceNames | ForEach-Object {
   if ($_ -like 'tools/*') { Join-Path $repoRoot $_ } else { Join-Path $PSScriptRoot ('src/' + $_) }
@@ -162,6 +170,7 @@ if ($Kind -eq 'stream') {
 
 $kernelHeader = Join-Path $sdk 'target\include\ps5\kernel.h'
 $sdkDefines = @()
+$sdkDefines += "-DPBS_PS5_CONTROLLER=$Ps5Controller"
 if($TesterRelease){$sdkDefines += '-DPBS_TESTER_RELEASE'}
 if($Ps5NoNativeRateDefault){$sdkDefines += '-DPBS_PS5_NO_NATIVE_RATE_DEFAULT'}
 if($Ps5OffsetDumpDefault){$sdkDefines += '-DPBS_PS5_OFFSET_DUMP_DEFAULT'}

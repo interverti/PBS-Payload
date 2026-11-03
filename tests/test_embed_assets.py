@@ -29,6 +29,8 @@ class EmbedAssetsTest(unittest.TestCase):
         self.assertIn("PBS_H264_HTML", (out / "webui.h").read_text(encoding='utf-8'))
         viewer = (out / "webui.h").read_text(encoding='utf-8')
         self.assertNotIn("/*PBS_VIDEOJS*/", viewer)
+        self.assertNotIn("/*PBS_CONTROLLER*/", viewer)
+        self.assertIn("/input/connect", viewer)
         self.assertIn("pbs-video-player", viewer)
         self.assertIn("live-video-skin", viewer)
 

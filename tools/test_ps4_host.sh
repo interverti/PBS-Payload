@@ -17,6 +17,8 @@ run firmware tests/ps4/system/firmware.c
 run ps5-capture-cleanup tests/ps5/capture_cleanup.c
 run ps5-capture-resolution tests/ps5/capture_resolution.c
 run ps5-capture-audio tests/ps5/capture_audio_request.c
+run ps5-controller tests/ps5/controller_backend.c payload/src/platform/ps5/offset/*.c
+run ps5-controller-disabled -pthread -DPBS_PS5_CONTROLLER=0 tests/ps5/controller_disabled.c payload/src/common/input/controller.c
 run problem-log tests/common/problem_log.c payload/src/common/diagnostics/problem_log.c
 run offset-report tests/ps4/dump/offset_report.c tools/dump/ps4/offset_report.c
 run kernel-image tests/ps4/dump/kernel_image.c tools/dump/ps4/kernel_image.c
@@ -76,16 +78,19 @@ run lifecycle-release -DPBS_PS4 -DPBS_PS4_REMOTE_AVCAP=1 -DPBS_PS4_REMOTE_LIFECY
 python3 payload/embed_assets.py
 "${CXX:-c++}" -std=c++20 -O2 -Wall -Wextra -Werror -Ipayload/src tests/media/rtp_packetizer.cpp -o "$out/rtp-packetizer"
 "$out/rtp-packetizer"
-run http-shutdown -pthread tests/http/shutdown.c payload/src/common/http/server.c
-run http-frame-rate -pthread tests/http/frame_rate.c payload/src/common/http/server.c
-run http-port-scan -pthread tests/http/port_scan.c payload/src/common/http/server.c
-run http-banner -pthread tests/http/banner.c payload/src/common/http/server.c
-run http-keyframe-refresh -pthread -Wl,--wrap=clock_gettime tests/http/keyframe_refresh.c payload/src/common/http/server.c
-run http-stream-jitter -pthread -Wl,--wrap=send -Wl,--wrap=sendto tests/http/stream_jitter.c payload/src/common/http/server.c
+run http-shutdown -pthread tests/http/shutdown.c payload/src/common/http/server.c payload/src/common/input/controller.c
+run http-frame-rate -pthread tests/http/frame_rate.c payload/src/common/http/server.c payload/src/common/input/controller.c
+run http-port-scan -pthread tests/http/port_scan.c payload/src/common/http/server.c payload/src/common/input/controller.c
+run http-banner -pthread tests/http/banner.c payload/src/common/http/server.c payload/src/common/input/controller.c
+run http-keyframe-refresh -pthread -Wl,--wrap=clock_gettime tests/http/keyframe_refresh.c payload/src/common/http/server.c payload/src/common/input/controller.c
+run http-stream-jitter -pthread -Wl,--wrap=send -Wl,--wrap=sendto tests/http/stream_jitter.c payload/src/common/http/server.c payload/src/common/input/controller.c
 "$out/http-stream-jitter" --rtp
-run http-profiles -pthread tests/http/profiles.c payload/src/common/http/server.c
+run http-profiles -pthread tests/http/profiles.c payload/src/common/http/server.c payload/src/common/input/controller.c
+run http-controller -pthread tests/http/controller.c payload/src/common/http/server.c payload/src/common/input/controller.c
 if command -v node >/dev/null 2>&1; then
   node tests/media/h264_mux_rate.js
+  node tests/input/controller.cjs
+  node tests/input/lifecycle.cjs
   if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
     node tests/media/avc_recording.cjs
   fi
@@ -96,10 +101,10 @@ else
   printf 'SKIP browser frame-rate regression: Node.js unavailable.\n'
 fi
 record_dir=$(mktemp -d "$PWD/$out/recording.XXXXXX")
-"$cc" "${flags[@]}" -pthread "-DPBS_RECORD_DIR=\"$record_dir\"" tests/http/record_restart.c payload/src/common/http/server.c -o "$out/http-record"
+"$cc" "${flags[@]}" -pthread "-DPBS_RECORD_DIR=\"$record_dir\"" tests/http/record_restart.c payload/src/common/http/server.c payload/src/common/input/controller.c -o "$out/http-record"
 "$out/http-record" "$record_dir"
 storage_dir=$(mktemp -d "$PWD/$out/storage.XXXXXX")
-"$cc" "${flags[@]}" -pthread "-DPBS_RECORD_DIR=\"$storage_dir\"" "-DPBS_RECORD_CONFIG=\"$storage_dir/destination\"" tests/http/recording_management.c payload/src/common/http/server.c -o "$out/http-recording-management"
+"$cc" "${flags[@]}" -pthread "-DPBS_RECORD_DIR=\"$storage_dir\"" "-DPBS_RECORD_CONFIG=\"$storage_dir/destination\"" tests/http/recording_management.c payload/src/common/http/server.c payload/src/common/input/controller.c -o "$out/http-recording-management"
 "$out/http-recording-management"
 python3 -m unittest discover -s tests -p test_verify_ps4_capture.py
 python3 -m unittest discover -s tests -p test_inspect_ps4_venc_journal.py
