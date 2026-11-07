@@ -1,6 +1,43 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "platform/ps5/offset/profile.h"
 
+static const pbs_ps5_request_initializer pbs_ps5_initializers_1001[] = {
+  { .offset = 0x0u, .size = 0x2u, .bytes = { 0xb8, 0x02 } },
+  { .offset = 0x8u, .size = 0x1u, .bytes = { 0x28 } },
+  { .offset = 0x30u, .size = 0x1u, .bytes = { 0x48 } },
+  { .offset = 0x38u, .size = 0x1u, .bytes = { 0x18 } },
+  { .offset = 0x48u, .size = 0x1u, .bytes = { 0x01 } },
+  { .offset = 0x50u, .size = 0x1u, .bytes = { 0x10 } },
+  { .offset = 0x58u, .size = 0x1u, .bytes = { 0x01 } },
+  { .offset = 0x5cu, .size = 0x1u, .bytes = { 0x09 } },
+  { .offset = 0x60u, .size = 0x1u, .bytes = { 0x18 } },
+  { .offset = 0x68u, .size = 0x1u, .bytes = { 0x01 } },
+  { .offset = 0x78u, .size = 0x1u, .bytes = { 0x30 } },
+  { .offset = 0xa8u, .size = 0x1u, .bytes = { 0xd8 } },
+  { .offset = 0xb0u, .size = 0x1u, .bytes = { 0x20 } },
+  { .offset = 0xc4u, .size = 0x1u, .bytes = { 0x23 } },
+  { .offset = 0xc8u, .size = 0x1u, .bytes = { 0x33 } },
+  { .offset = 0xd0u, .size = 0x1u, .bytes = { 0x20 } },
+  { .offset = 0xf0u, .size = 0x1u, .bytes = { 0x18 } },
+  { .offset = 0xf8u, .size = 0x1u, .bytes = { 0x01 } },
+  { .offset = 0x108u, .size = 0x1u, .bytes = { 0x18 } },
+  { .offset = 0x110u, .size = 0x1u, .bytes = { 0x01 } },
+  { .offset = 0x114u, .size = 0x1u, .bytes = { 0x19 } },
+  { .offset = 0x170u, .size = 0x1u, .bytes = { 0x10 } },
+  { .offset = 0x180u, .size = 0x1u, .bytes = { 0x50 } },
+  { .offset = 0x188u, .size = 0x1u, .bytes = { 0x01 } },
+  { .offset = 0x1d0u, .size = 0x1u, .bytes = { 0xe8 } },
+  { .offset = 0x1d8u, .size = 0x1u, .bytes = { 0x28 } },
+  { .offset = 0x200u, .size = 0x1u, .bytes = { 0x88 } },
+  { .offset = 0x28cu, .size = 0x1u, .bytes = { 0x02 } },
+  { .offset = 0x290u, .size = 0x1u, .bytes = { 0x10 } },
+  { .offset = 0x298u, .size = 0x1u, .bytes = { 0x01 } },
+  { .offset = 0x29cu, .size = 0x1u, .bytes = { 0x01 } },
+  { .offset = 0x2a0u, .size = 0x1u, .bytes = { 0x10 } },
+  { .offset = 0x2a8u, .size = 0x1u, .bytes = { 0x01 } },
+  { .offset = 0x2acu, .size = 0x1u, .bytes = { 0x6e } },
+};
+
 const pbs_ps5_offset_profile pbs_ps5_offsets_1001 = {
   .firmware = 0x10010000u,
   .avcap2 = {
@@ -26,5 +63,7 @@ const pbs_ps5_offset_profile pbs_ps5_offsets_1001 = {
     .paste_offset = 0x200u,
     .video_mode_offset = 0x288u,
     .mask_mode_offset = 0x28cu,
+    .initializers = pbs_ps5_initializers_1001,
+    .initializer_count = 0x22u,
   },
 };

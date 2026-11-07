@@ -30,7 +30,7 @@
 #define PBS_WORKER_CMD_SCRATCH 6u
 #define PBS_WORKER_WRITE_MAX 0x1000u
 /* Largest copy served in one reply; the payload keeps it below its buffer. */
-#define PBS_WORKER_COPY_MAX 0x40000u
+#define PBS_WORKER_COPY_MAX 0x200000u
 
 #ifndef __ASSEMBLER__
 #include <stdint.h>

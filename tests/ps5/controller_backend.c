@@ -105,6 +105,7 @@ int main(void) {
     configured = NULL;
     pbs_ps5_controller_configure();
     assert(configured);
+    assert(configured->destroy);
   }
   firmware = 0x99990000;
   configured = NULL;
@@ -116,22 +117,27 @@ int main(void) {
   missing_export = 1;
   assert(connect_pad(NULL) && !init_calls && !add_calls);
   assert(!disconnect_pad(NULL));
+  assert(!destroy_pad(NULL));
   reset();
   init_rc = -7;
   assert(connect_pad(NULL) == -7 && !add_calls);
   assert(!disconnect_pad(NULL));
+  assert(!destroy_pad(NULL));
   reset();
   privilege_rc = -8;
   assert(connect_pad(NULL) == -8 && !add_calls);
   assert(!disconnect_pad(NULL));
+  assert(!destroy_pad(NULL));
   reset();
   add_rc = -9;
   assert(connect_pad(NULL) == -9 && privilege_value == 1);
-  assert(!disconnect_pad(NULL) && privilege_value == 0 && !delete_calls);
+  assert(!disconnect_pad(NULL) && privilege_value == 1 && !delete_calls);
+  assert(!destroy_pad(NULL) && privilege_value == 0 && !delete_calls);
+  assert(!destroy_pad(NULL));
 
   reset();
   assert(!connect_pad(NULL) && pad.owned && privilege_value == 1);
-  assert(connect_pad(NULL) && add_calls == 1);
+  assert(!connect_pad(NULL) && add_calls == 1);
   pbs_input_state state = {
       .buttons = 0x4000, .lx = 0, .ly = 255, .rx = 19, .ry = 128, .l2 = 15, .r2 = 254};
   assert(!write_pad(NULL, &state));
@@ -148,23 +154,27 @@ int main(void) {
   assert(!memcmp(inserted, expected, sizeof expected));
   insert_rc = -10;
   assert(write_pad(NULL, &state) == -10);
+  insert_rc = 0;
   delete_rc = -11;
-  assert(disconnect_pad(NULL) == -11 && pad.owned && privilege_value == 1);
-  assert(connect_pad(NULL) && add_calls == 1);
+  assert(!disconnect_pad(NULL) && pad.owned && privilege_value == 1 && !delete_calls);
+  assert(!connect_pad(NULL) && add_calls == 1);
+  assert(destroy_pad(NULL) == -11 && pad.owned && privilege_value == 1 && delete_calls == 1);
   delete_rc = 0;
-  assert(!disconnect_pad(NULL) && !pad.owned && privilege_value == 0);
-  assert(!disconnect_pad(NULL) && delete_calls == 2);
-  assert(!connect_pad(NULL) && init_calls == 1);
+  assert(!destroy_pad(NULL) && !pad.owned && privilege_value == 0);
+  assert(!destroy_pad(NULL) && delete_calls == 2);
+  assert(!connect_pad(NULL) && add_calls == 2);
   privilege_rc = -12;
-  assert(disconnect_pad(NULL) == -12 && !pad.owned && pad.privileged);
-  assert(connect_pad(NULL) && add_calls == 2);
+  assert(destroy_pad(NULL) == -12 && !pad.owned && pad.privileged);
+  privilege_rc = 0;
+  assert(!destroy_pad(NULL) && !pad.privileged);
 
   reset();
   invalid_id = 1;
   assert(connect_pad(NULL) && pad.uncertain);
   assert(disconnect_pad(NULL) && !delete_calls && privilege_value == 1);
+  assert(destroy_pad(NULL) && !delete_calls);
   assert(connect_pad(NULL) && add_calls == 1);
-  puts("PS5 native controller: selector, export probing, state layout and cleanup failures "
-       "verified offline");
+  puts("PS5 native controller: persistent device reuse, session release, final teardown, "
+       "selector, export probing, state layout and cleanup failures verified offline");
   return 0;
 }

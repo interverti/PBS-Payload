@@ -403,6 +403,7 @@ int pbs_inject_revalidate_scratch(pbs_inject_t *ctx) {
 }
 
 long pbs_inject_call(pbs_inject_t *ctx, intptr_t fn, const uint64_t args[6]) {
+  if (worker_call_hook) return worker_call_hook(fn, args);
   struct reg bak, jmp;
   if (!ctx || pbs_inject_ensure_stopped(ctx)) return LONG_MIN;
   pid_t reg_pid = ctx->lwp > 0 ? ctx->lwp : ctx->pid;

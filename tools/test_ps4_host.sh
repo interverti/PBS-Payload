@@ -16,6 +16,8 @@ run() {
 run firmware tests/ps4/system/firmware.c
 run ps5-capture-cleanup tests/ps5/capture_cleanup.c
 run ps5-capture-resolution tests/ps5/capture_resolution.c
+run ps5-request-initializers tests/ps5/request_initializers.c payload/src/platform/ps5/offset/*.c
+run ps5-request-template -DPBS_TEST tests/ps5/request_template.c payload/src/platform/ps5/request_template.c payload/src/platform/ps5/offset/*.c
 run ps5-capture-audio tests/ps5/capture_audio_request.c
 run ps5-controller tests/ps5/controller_backend.c payload/src/platform/ps5/offset/*.c
 run ps5-controller-disabled -pthread -DPBS_PS5_CONTROLLER=0 tests/ps5/controller_disabled.c payload/src/common/input/controller.c
@@ -47,6 +49,8 @@ run privacy tests/ps4/capture/video_privacy.c
 run worker-socket -pthread tests/ps4/worker/socket.c payload/src/platform/ps4/worker/client.c payload/src/platform/ps4/worker/remote.c
 run worker-shared -pthread tests/ps4/worker/shared_memory.c payload/src/platform/ps4/worker/client.c payload/src/platform/ps4/worker/remote.c payload/src/platform/ps4/worker/entry.S
 run worker-boot -DPBS_PS4 tests/ps4/worker/boot.c payload/src/platform/ps4/worker/boot.c payload/src/platform/ps4/worker/remote.c
+run ps5-worker tests/ps5/worker_boot.c payload/src/platform/ps5/worker.c payload/src/platform/ps4/worker/remote.c
+run ps5-capture-fallback tests/ps5/test_capture_fallback.c
 run worker-probe -DPBS_PS4 tests/ps4/diagnostics/worker_probe.c payload/src/platform/ps4/diagnostics/worker_probe.c
 for worker in 0 1; do
   run control-$worker -DPBS_TEST_CONTROL -DPBS_PS4 -DPBS_PS4_REMOTE_AVCAP=1 -DPBS_PS4_WORKER_BOOT=$worker tests/ps4/system/control_rollback.c payload/src/platform/ps4/system/control.c

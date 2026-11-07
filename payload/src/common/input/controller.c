@@ -144,6 +144,26 @@ void pbs_input_wait(void) {
     input.thread_valid = 0;
   }
 }
+/* Session disconnect keeps the backend device registered for the payload
+ * lifetime. This is the only path that destroys it, after the worker thread
+ * has been joined, so no Add/Delete churn follows a normal reconnect. */
+void pbs_input_shutdown(void) {
+  pthread_mutex_lock(&input.lock);
+  input.active = input.pending = 0;
+  if (input.backend) {
+    if (input.owned) {
+      (void)input.backend->write(input.opaque, &released);
+    }
+    int rc = input.backend->destroy(input.opaque);
+    input.last_rc = rc;
+    input.cleanup_required = rc != 0;
+    if (!rc) {
+      input.owned = 0;
+      memset(input.token, 0, sizeof input.token);
+    }
+  }
+  pthread_mutex_unlock(&input.lock);
+}
 static int new_token(char token[PBS_INPUT_TOKEN_SIZE]) {
   unsigned char random[16];
   size_t used = 0;

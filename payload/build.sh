@@ -231,7 +231,10 @@ elif [[ $kind == stream || ( $kind == smoke && $platform == ps4 ) ]]; then
     if [[ $daemon_dump == 1 ]]; then sources+=("$root/src/platform/ps4/diagnostics/daemon_dump.c"); fi
   else
     sources=("$root/src/platform/ps5/main.c" "$root/src/platform/ps5/offset_dump.c"
-      "$root/src/platform/ps5/module_dump.c" "$root/src/common/process/inject.c"
+      "$root/src/platform/ps5/module_dump.c" "$root/src/platform/ps5/request_template.c"
+      "$root/src/platform/ps5/worker.c"
+      "$root/src/platform/ps4/worker/client.c" "$root/src/platform/ps4/worker/remote.c"
+      "$root/src/common/process/inject.c"
       "$root/src/common/http/server.c" "$root/src/common/input/controller.c")
     for offset_source in "$root"/src/platform/ps5/offset/*.c; do
       sources+=("$offset_source")

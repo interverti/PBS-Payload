@@ -28,8 +28,8 @@ typedef long (*worker_send_fn)(int, const void *, unsigned long, int);
 typedef int (*worker_close_fn)(int);
 typedef int (*worker_sleep_fn)(unsigned);
 
-static int worker_read_full(worker_recv_fn recv_fn, int fd, void *buffer,
-                            unsigned size) {
+static __attribute__((always_inline)) inline int worker_read_full(
+    worker_recv_fn recv_fn, int fd, void *buffer, unsigned size) {
   unsigned char *out = buffer;
   unsigned done = 0;
   while (done < size) {
@@ -40,8 +40,8 @@ static int worker_read_full(worker_recv_fn recv_fn, int fd, void *buffer,
   return 0;
 }
 
-static int worker_send_full(worker_send_fn send_fn, int fd, const void *buffer,
-                            unsigned size) {
+static __attribute__((always_inline)) inline int worker_send_full(
+    worker_send_fn send_fn, int fd, const void *buffer, unsigned size) {
   const unsigned char *in = buffer;
   unsigned done = 0;
   while (done < size) {
@@ -50,6 +50,14 @@ static int worker_send_full(worker_send_fn send_fn, int fd, const void *buffer,
     done += (unsigned)n;
   }
   return 0;
+}
+
+static __attribute__((always_inline)) inline void worker_copy_bytes(
+    void *destination, const void *source, unsigned size) {
+  volatile unsigned char *out = (volatile unsigned char *)destination;
+  const volatile unsigned char *in =
+      (const volatile unsigned char *)source;
+  for (unsigned i = 0; i < size; ++i) out[i] = in[i];
 }
 
 PBS_WORKER_ASM_SECTION void pbs_worker_remote_main(void *arg) {
@@ -94,28 +102,28 @@ PBS_WORKER_ASM_SECTION void pbs_worker_remote_main(void *arg) {
   for (;;) {
     if (worker_read_full(recv_fn, fd, request, PBS_WORKER_REQUEST_SIZE)) break;
     uint32_t wire_cmd;
-    __builtin_memcpy(&wire_cmd, request, sizeof wire_cmd);
+    worker_copy_bytes(&wire_cmd, request, sizeof wire_cmd);
     /* Prevent a compiler-generated jump table outside this relocated blob. */
     volatile uint32_t cmd = wire_cmd;
     uint64_t fn;
-    __builtin_memcpy(&fn, request + 0x08, sizeof fn);
+    worker_copy_bytes(&fn, request + 0x08, sizeof fn);
     uint64_t result = 0;
     uint32_t len = 0;
     if (cmd == PBS_WORKER_CMD_SCRATCH) {
       result = (uint64_t)(uintptr_t)scratch;
     } else if (cmd == PBS_WORKER_CMD_CALL) {
       uint64_t a[6];
-      __builtin_memcpy(a, request + 0x10, sizeof a);
+      worker_copy_bytes(a, request + 0x10, sizeof a);
       long (*target)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t) =
           (long (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
                     uint64_t))(uintptr_t)fn;
       result = (uint64_t)target(a[0], a[1], a[2], a[3], a[4], a[5]);
     } else if (cmd == PBS_WORKER_CMD_COPY) {
-      __builtin_memcpy(&len, request + 0x40, sizeof len);
+      worker_copy_bytes(&len, request + 0x40, sizeof len);
       if (len > PBS_WORKER_COPY_MAX) len = PBS_WORKER_COPY_MAX;
     } else if (cmd == PBS_WORKER_CMD_WRITE) {
       uint32_t want = 0;
-      __builtin_memcpy(&want, request + 0x40, sizeof want);
+      worker_copy_bytes(&want, request + 0x40, sizeof want);
       unsigned char tmp[PBS_WORKER_WRITE_MAX];
       if (want == 0 || want > PBS_WORKER_WRITE_MAX ||
           worker_read_full(recv_fn, fd, tmp, want)) break;
@@ -126,8 +134,8 @@ PBS_WORKER_ASM_SECTION void pbs_worker_remote_main(void *arg) {
       for (uint32_t i = 0; i < want; ++i) dst[i] = tmp[i];
       result = want;
     }
-    __builtin_memcpy(reply, &result, sizeof result);
-    __builtin_memcpy(reply + 0x08, &len, sizeof len);
+    worker_copy_bytes(reply, &result, sizeof result);
+    worker_copy_bytes(reply + 0x08, &len, sizeof len);
     if (worker_send_full(send_fn, fd, reply, PBS_WORKER_REPLY_SIZE)) break;
     if (cmd == PBS_WORKER_CMD_COPY && len)
       if (worker_send_full(send_fn, fd, (const void *)(uintptr_t)fn, len)) break;

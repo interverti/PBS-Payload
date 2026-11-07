@@ -20,6 +20,7 @@
 
 
 #include "common/http/server.h"
+#include "common/input/controller.h"
 #include "common/media/profiles.h"
 #include "common/process/inject.h"
 #include "platform/ps5/capture_fallback.h"
@@ -30,6 +31,8 @@
 #include "platform/ps5/offset/profile.h"
 #include "platform/ps5/module_dump.h"
 #include "platform/ps5/controller.h"
+#include "platform/ps5/request_template.h"
+#include "platform/ps5/worker.h"
 
 
 
@@ -92,7 +95,6 @@ static uint32_t requested_min_qp = 35;
 static unsigned stress_keyframe_period;
 static int stress_live;
 static int live_request;
-static unsigned live_start_attempts;
 static int live_server_started;
 /* Set when the listener could not be created at all, so the closing
  * notification reports the port conflict instead of a capture failure. */
@@ -646,10 +648,9 @@ avopen_retry:;
       notify("PBS: 1440p capture unavailable on this firmware; select 1080p or 2160p");
       return 1;
     }
-    uint32_t detected_video_mode = 0;
-    uint32_t open_result = 0;
+    int open_attempted = 0;
+    int opened_session = 0;
     live_profile_ready = 0;
-    if(live_request)live_start_attempts++;
     int owned_session_closed = 1;
     int dump_this_open = 0;
     FILE *f = open_report("inject.txt", "a");
@@ -662,6 +663,20 @@ avopen_retry:;
     if (pbs_inject_begin(argv[2], &ctx)) {
       fprintf(f, "begin failed errno=%d\n", errno);
       fclose(f);
+      return 1;
+    }
+    unsigned char native_request[0x400];
+    uint32_t native_usage = argc > 5 ? (uint32_t)strtoul(argv[5], NULL, 0) : 2;
+    int native_template_found = !pbs_ps5_find_native_request(
+        ctx.pid, layout, (uint32_t)width, (uint32_t)height, capture_feature,
+        native_usage, requested_resolution, fps_mode,
+        native_request, sizeof native_request, f);
+    if (pbs_ps5_worker_boot(&ctx, f)) {
+      fprintf(f,
+              "PS5 worker unavailable; refusing sustained capture with SceRemotePlay traced\n");
+      pbs_inject_end(&ctx);
+      fclose(f);
+      notify("PBS: Remote Play worker unavailable; capture not started");
       return 1;
     }
     const intptr_t base = ctx.scratch;
@@ -687,6 +702,7 @@ avopen_retry:;
         }
         if (capture_call_uncertain || ctx.asserted) {
           fprintf(f, "Preflight videoOutMode interrupted/asserted; stopping capture\n");
+          (void)pbs_ps5_worker_shutdown(f);
           pbs_inject_end(&ctx);
           fclose(f);
           notify("PBS: video mode query failed");
@@ -715,6 +731,10 @@ avopen_retry:;
       /* Preflight may have changed the automatic profile since admission. */
       pbs_ps5_resolution_mode(capture_firmware,height,&requested_resolution);
       uint32_t resolution = requested_resolution;
+      unsigned char *params = scratch_zero + 8;
+      fprintf(f, "Native request source=synthetic template-found=%d reuse-disabled catalogued-initializers=%u\n",
+              native_template_found,
+              (unsigned)rp->initializer_count);
       memcpy(scratch_zero + 8, &size, 8);
       memcpy(scratch_zero + 0x10, &common_size, 8);
       memcpy(scratch_zero + 8 + 0x14, &usage, 4);
@@ -722,7 +742,6 @@ avopen_retry:;
       memcpy(scratch_zero + 8 + 0x1c, &fps_mode, 4);
       memcpy(scratch_zero + 8 + 0x28, &feature, 4);
       /* ImagePaste uses the full output rectangle and all surface masks; offsets are relative to Params. */
-      unsigned char *params = scratch_zero + 8;
       if (native_rate_config) {
         /* Rate group layout comes from this firmware's native constructor.
          * Keep initial capacity >= the backend's budget-per-frame floor. */
@@ -853,13 +872,13 @@ avopen_retry:;
         goto avopen_cleanup;
       }
       fprintf(f, "Params videoOutMode=0x%x\n", video_mode);
-      detected_video_mode = video_mode;
     }
     if (offset_dump && !offset_dumped) {
       pbs_ps5_dump_export_offsets(f, ctx.pid);
       pbs_ps5_dump_request(f, "before OpenVideo", scratch_zero + 8, avcap->request_size);
       offset_dumped = dump_this_open = 1;
     }
+    open_attempted = 1;
     long rc = fn_open ? call(&ctx, fn_open,
                               (uint64_t[6]){(uint64_t)base, (uint64_t)base + 8, 0, 0, 0, 0}) : LONG_MIN;
     if (rc==LONG_MIN || ctx.asserted) owned.uncertain=1;
@@ -875,7 +894,6 @@ avopen_retry:;
       pbs_ps5_dump_dependencies(f,&ctx);
       offset_dumped=1;
     }
-    open_result = (uint32_t)rc;
     if (rc == LONG_MIN || (int32_t)(uint32_t)rc < 0 || ctx.asserted)
       snprintf(failure_note, sizeof failure_note, "PBS: OpenVideo 0x%08x%s",
                (unsigned)(uint32_t)rc, ctx.asserted ? " ASSERT" : "");
@@ -900,6 +918,7 @@ avopen_retry:;
       fprintf(f, "handle=0x%llx\n", (unsigned long long)h);
       if (!strcmp(mode, "avopenfast") && rc != LONG_MIN &&
           (int32_t)(uint32_t)rc >= 0 && h) {
+        opened_session = 1;
         owned_session_closed = 0;
         if (diagnostic_open_only) fprintf(f, "diagnostic open-only: closing handle without starting stream\n");
         else if (argc > 6) capture_stream(f, &ctx, h, atoi(argv[6]), argc > 7 ? atoi(argv[7]) : 9999, width, height, capture_feature, audio_mode);
@@ -917,13 +936,13 @@ avopen_cleanup:;
     int clear_ok = !pbs_ps5_release_capture(&owned,owned_session_closed,
                                            release_capture_step,&release_ctx);
     if (!clear_ok) fprintf(f,"Capture cleanup incomplete; no automatic retry or profile change\n");
-    /* Retrying the smaller caller-owned profile is safe only after cleanup. */
-    int fallback_1080 = live_request && automatic_resolution && clear_ok && !ctx.asserted &&
-        pbs_ps5_should_fallback_1080(capture_firmware, open_result,
-                                     detected_video_mode, width, height);
-    if (fallback_1080)
-      fprintf(f, "OpenVideo rejected 1440p (0x%08x, video mode 0x%x); retrying 1080p with feature 12\n",
-              open_result, detected_video_mode);
+    if (pbs_ps5_worker_shutdown(f)) {
+      fprintf(f,
+              "PS5 worker cleanup incomplete; no automatic retry or profile change\n");
+      clear_ok = 0;
+    }
+    if (open_attempted && !opened_session)
+      fprintf(f, "OpenVideo failure quarantined; no automatic reopen in this payload execution\n");
     pbs_inject_end(&ctx);
     fclose(f);
     /* Reconfigure only after closing handles, stopping the resource request,
@@ -934,11 +953,6 @@ avopen_cleanup:;
       capture_feature = previous_profile.feature;
     }
     changing_profile = 0;
-    if (fallback_1080) {
-      width = 1920;
-      height = 1080;
-      capture_feature = 12;
-    }
     int requested_height = 0;
     if (live_request && clear_ok && !ctx.asserted && pbs_h264_take_profile_request(&requested_height)) {
       pbs_capture_profile next;
@@ -951,14 +965,16 @@ avopen_cleanup:;
         changing_profile = 1;
       }
     }
-    /* A clean OpenVideo rejection can be transient while scan-in ownership
-     * settles. The pre-ac15239 path retried it; keep that bounded recovery. */
-    int retry_start = clear_ok && !live_server_started && live_start_attempts < 6;
-    if (live_request && clear_ok && !ctx.asserted && (pbs_h264_server_running() || retry_start)) {
+    /* A rejected OpenVideo may leave a backend slot occupied even when the
+     * public cleanup calls succeed. Reopen only after closing a real handle. */
+    int server_running = live_request && pbs_h264_server_running();
+    if (pbs_ps5_can_reopen_capture(clear_ok, ctx.asserted,
+                                   opened_session, server_running)) {
       usleep(250000);
-      if (pbs_h264_server_running() || retry_start) goto avopen_retry;
+      if (pbs_h264_server_running()) goto avopen_retry;
     }
     if (live_request) { pbs_h264_server_stop(); pbs_h264_server_wait(); }
+    pbs_input_shutdown();
     notify(live_server_started ? "PBS: streaming stopped"
                                : (stream_failure[0] ? stream_failure : failure_note));
     return live_server_started ? 0 : 1;

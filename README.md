@@ -244,10 +244,13 @@ for that session. To exclude the native controller backend at build time, use
 `payload/build.sh ps5`. The default is 1 in both build scripts. With input disabled,
 the viewer hides the controller section and registration is unavailable.
 
-Input is released after 250 ms without updates; after two seconds the virtual
-device is removed. Losing focus sends neutral input. Video profile changes keep
-the controller session. Basic buttons, sticks and triggers are implemented;
-touch coordinates, motion and feedback are not. This feature is PS5 only.
+Input is released after 250 ms without updates; after two seconds the viewer
+session is released, but the virtual device stays registered for the payload
+lifetime. Reconnecting reuses that device instead of creating another one.
+Losing focus sends neutral input. Video profile changes keep the controller
+session. The device and process privilege are removed only when the payload
+stops. Basic buttons, sticks and triggers are implemented; touch coordinates,
+motion and feedback are not. This feature is PS5 only.
 
 The backend resolves native `libScePad` exports locally and uses the existing
 firmware selector. Offline tests cover all 24 measured profile IDs, framing,
@@ -261,8 +264,9 @@ in `X-PBS-Controller` for `/input/state` and `/input/disconnect`. All three POST
 routes require `X-PBS-Input: 1`. State bodies contain eight unsigned decimal CSV
 fields: `sequence,buttons,lx,ly,rx,ry,l2,r2`. Stick centres are 128, axes and
 triggers range from 0 to 255, and sequence numbers must advance modulo 2^32.
-Keep sending state at least every 100 ms while connected. A failed deletion
-blocks reconnection and is reported in status and the log.
+Keep sending state at least every 100 ms while connected. Deletion happens only
+at payload shutdown; if it fails, `cleanup_required` and `last_rc` report it in
+status and the log.
 
 ## Known limits
 

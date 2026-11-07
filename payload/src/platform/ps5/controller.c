@@ -65,19 +65,27 @@ static int prepare(void) {
 }
 static int connect_pad(void *unused) {
   (void)unused;
-  if (pad.owned || pad.privileged) {
+  if (pad.uncertain) {
     return -1;
   }
   int rc = prepare();
   if (rc) {
     return rc;
   }
-  rc = pad.privilege(1);
-  log_result("SetProcessPrivilege(1)", rc);
-  if (rc) {
-    return rc;
+  if (!pad.privileged) {
+    rc = pad.privilege(1);
+    log_result("SetProcessPrivilege(1)", rc);
+    if (rc) {
+      return rc;
+    }
+    pad.privileged = 1;
   }
-  pad.privileged = 1;
+  /* The virtual device belongs to the payload, not to a viewer session.
+   * Reuse it for later sessions instead of creating and deleting one device
+   * per connect: repeated Add/Delete exhausts libScePad's device pool. */
+  if (pad.owned) {
+    return 0;
+  }
   /* AddDevice reads the caller's u32 parameter and profile byte at +4.
    * The library selects its firmware-native kernel representation itself. */
   unsigned char request[0x40] = {0}, output[16] = {0};
@@ -126,6 +134,16 @@ static int disconnect_pad(void *unused) {
     log_result("Unknown device ID; no blind delete or reconnect", -1);
     return -1;
   }
+  /* Session release only: keep the device and process privilege registered
+   * until destroy_pad(), so a reconnect never calls AddDevice again. */
+  return 0;
+}
+static int destroy_pad(void *unused) {
+  (void)unused;
+  if (pad.uncertain) {
+    log_result("Unknown device ID; no blind delete or reconnect", -1);
+    return -1;
+  }
   if (pad.owned) {
     int rc = pad.remove((int)pad.device);
     log_result("VirtualDeviceDeleteDevice", rc);
@@ -143,10 +161,11 @@ static int disconnect_pad(void *unused) {
     }
     pad.privileged = 0;
   }
+  pad.ready = 0;
   return 0;
 }
 void pbs_ps5_controller_configure(void) {
-  static const pbs_input_backend backend = {connect_pad, write_pad, disconnect_pad};
+  static const pbs_input_backend backend = {connect_pad, write_pad, disconnect_pad, destroy_pad};
   /* Follow the same exact/family selector as video; no copied firmware list. */
   if (pbs_ps5_find_offsets(kernel_get_fw_version())) {
     pbs_input_configure(&backend, NULL);

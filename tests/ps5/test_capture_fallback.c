@@ -19,18 +19,14 @@ int main(void) {
   assert(!pbs_ps5_prefer_1080_before_open(0x12700001u, 0x14u));
   assert(!pbs_ps5_prefer_1080_before_open(0x12400009u, 0x144u));
   assert(!pbs_ps5_prefer_1080_before_open(0x13400001u, 0x14u));
+  assert(pbs_ps5_prefer_1080_before_open(0x10010000u, 0u));
+  assert(pbs_ps5_prefer_1080_before_open(0x10010000u, 0x14u));
 
-  /* For all firmware, reject a failing automatic 1440p profile once and
-   * retry 1080p after cleanup. Do not interpret mode values as HDR enums. */
-  assert(pbs_ps5_should_fallback_1080(0x13420000u, 0x81950008u, 0x14u, 2560, 1440));
-  assert(pbs_ps5_should_fallback_1080(0x13600007u, 0x81950008u, 0x14u, 2560, 1440));
-  assert(pbs_ps5_should_fallback_1080(0x12700001u, 0x81950008u, 0x144u, 2560, 1440));
-  assert(pbs_ps5_should_fallback_1080(0x12400009u, 0x81950008u, 0x144u, 2560, 1440));
-  assert(pbs_ps5_should_fallback_1080(0x06020004u, 0x81950008u, 0x0u, 2560, 1440));
-  assert(!pbs_ps5_should_fallback_1080(0x13600007u, 0x81950001u, 0x14u, 2560, 1440));
-  assert(!pbs_ps5_should_fallback_1080(0x13600007u, 0u, 0x14u, 2560, 1440));
-  assert(!pbs_ps5_should_fallback_1080(0x13600007u, 0x81950008u, 0x14u, 1920, 1080));
-  assert(!pbs_ps5_should_fallback_1080(0x13600007u, 0x81950008u, 0x14u, 3840, 2160));
-  puts("PASS: FW13.42 conservative auto startup, FW13.60/12.70 proactive 1080p, bounded fallback");
+  assert(pbs_ps5_can_reopen_capture(1, 0, 1, 1));
+  assert(!pbs_ps5_can_reopen_capture(1, 0, 0, 1));
+  assert(!pbs_ps5_can_reopen_capture(1, 1, 1, 1));
+  assert(!pbs_ps5_can_reopen_capture(0, 0, 1, 1));
+  assert(!pbs_ps5_can_reopen_capture(1, 0, 1, 0));
+  puts("PASS: proactive 1080p startup and rejected OpenVideo quarantine");
   return 0;
 }

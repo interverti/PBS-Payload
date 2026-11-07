@@ -154,7 +154,10 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $sourceNames = if ($Kind -eq 'dump') {
   @('platform/ps5/module_dump.c', 'tools/dump/ps5/dump_main.c')
 } else {
-  @('platform/ps5/main.c', 'platform/ps5/offset_dump.c', 'platform/ps5/module_dump.c', 'common/process/inject.c', 'common/http/server.c', 'common/input/controller.c')
+  @('platform/ps5/main.c', 'platform/ps5/offset_dump.c', 'platform/ps5/module_dump.c',
+    'platform/ps5/request_template.c', 'platform/ps5/worker.c', 'platform/ps4/worker/client.c',
+    'platform/ps4/worker/remote.c', 'common/process/inject.c',
+    'common/http/server.c', 'common/input/controller.c')
 }
 if ($Kind -eq 'stream' -and $Ps5Controller -eq 1) {
   $sourceNames += 'platform/ps5/controller.c'

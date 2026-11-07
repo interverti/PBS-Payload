@@ -11,7 +11,7 @@
 
 static pthread_mutex_t mock_lock = PTHREAD_MUTEX_INITIALIZER;
 static pbs_input_state last_state;
-static int create_count, remove_count, write_error, remove_error;
+static int create_count, remove_count, destroy_count, write_error, remove_error, destroy_error;
 static char response[4096];
 static int create_pad(void *unused) {
   (void)unused;
@@ -31,6 +31,14 @@ static int remove_pad(void *unused) {
   pthread_mutex_lock(&mock_lock);
   remove_count++;
   int rc = remove_error;
+  pthread_mutex_unlock(&mock_lock);
+  return rc;
+}
+static int destroy_pad(void *unused) {
+  (void)unused;
+  pthread_mutex_lock(&mock_lock);
+  destroy_count++;
+  int rc = destroy_error;
   pthread_mutex_unlock(&mock_lock);
   return rc;
 }
@@ -83,7 +91,7 @@ static pbs_input_state snapshot(void) {
   return state;
 }
 int main(void) {
-  static const pbs_input_backend backend = {create_pad, write_pad, remove_pad};
+  static const pbs_input_backend backend = {create_pad, write_pad, remove_pad, destroy_pad};
   const unsigned char sps[] = {0x67, 0x4d, 0x40, 0x28}, pps[] = {0x68, 0xee, 0x3c, 0x80};
   char token[PBS_INPUT_TOKEN_SIZE], old[PBS_INPUT_TOKEN_SIZE];
   assert(pbs_input_connect(token) == 501);
@@ -132,6 +140,7 @@ int main(void) {
   request("POST", "/stop", NULL, "", "", 200, 0);
   pbs_h264_server_wait();
   assert(remove_count == 3);
+  assert(destroy_count == 0);
   assert(!pbs_h264_server_start(18098, 1920, 1080, sps, sizeof sps, pps, sizeof pps));
   owner(token);
   pthread_mutex_lock(&mock_lock);
@@ -156,6 +165,9 @@ int main(void) {
   pbs_h264_server_stop();
   pbs_h264_server_wait();
   assert(remove_count == before + 1);
+  assert(destroy_count == 0);
+  pbs_input_shutdown();
+  assert(destroy_count == 1);
   assert(create_count == 5);
   puts("Controller HTTP ownership, framing, sequence wrap, watchdog, shutdown and failure cleanup "
        "verified");

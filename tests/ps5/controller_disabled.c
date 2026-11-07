@@ -15,6 +15,7 @@ int main(void) {
   assert(pbs_input_connect(token) == 501);
   pbs_input_stop();
   pbs_input_wait();
+  pbs_input_shutdown();
   puts("PS5 controller excluded: no native backend, registration refused");
   return 0;
 }

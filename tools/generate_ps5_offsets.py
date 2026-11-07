@@ -162,6 +162,97 @@ def mem_store(ins, base, size=None):
     return dst.mem.disp, src.imm if src.type == X86_OP_IMM else None
 
 
+def request_initializers(data: bytes, start: int, size: int, base: int) -> tuple:
+    """Recover only deterministic constructor writes into Params.
+
+    Zero-filled storage is already provided by the payload. Dynamic register
+    stores are deliberately excluded. Direct immediates and RIP-relative
+    constant vectors are accepted only when no unknown store targets the same
+    byte, and conflicting constants make that byte ineligible. The result is
+    a compact list of bounded runs; it contains no pointers or runtime values.
+    """
+    md = disassembler()
+    known_registers = {}
+    values = [set() for _ in range(size)]
+    unknown = set()
+
+    def register_key(ins, register):
+        name = ins.reg_name(register)
+        match = re.fullmatch(r"[xyz]mm(\d+)", name)
+        return f"vec{match.group(1)}" if match else name
+
+    for ins in md.disasm(data[start:start + 0x1000], start):
+        operands = ins.operands
+        if ins.mnemonic.startswith("ret"):
+            break
+        # Branches do not clobber RIP-loaded vector constants. Calls do.
+        if ins.mnemonic.startswith("call"):
+            known_registers.clear()
+        if operands and operands[0].type == X86_OP_REG:
+            key = register_key(ins, operands[0].reg)
+            known_registers.pop(key, None)
+            if (len(operands) == 2 and operands[1].type == X86_OP_MEM
+                    and operands[1].mem.base == X86_REG_RIP
+                    and operands[1].size in (8, 16, 32)):
+                origin = ins.address + ins.size + operands[1].mem.disp
+                origin += prefix_rva_bias(data)
+                width = operands[1].size
+                if 0 <= origin <= len(data) - width:
+                    known_registers[key] = data[origin:origin + width]
+            elif (ins.mnemonic in ("vpxor", "vxorps", "vxorpd", "pxor")
+                  and len(operands) >= 2
+                  and all(op.type == X86_OP_REG for op in operands[1:])
+                  and len({register_key(ins, op.reg) for op in operands[1:]}) == 1):
+                # VEX zeroing clears the full architectural vector family;
+                # later constructors commonly store YMM after zeroing XMM.
+                known_registers[key] = bytes(64)
+
+        if len(operands) != 2 or operands[0].type != X86_OP_MEM:
+            continue
+        destination, source = operands
+        if ins.reg_name(destination.mem.base) not in ("rbx", "rdi"):
+            continue
+        offset = destination.mem.disp - base
+        width = destination.size
+        if width <= 0 or offset < 0 or offset + width > size:
+            continue
+        payload = None
+        if source.type == X86_OP_IMM:
+            mask = (1 << (width * 8)) - 1
+            payload = (source.imm & mask).to_bytes(width, "little")
+        elif source.type == X86_OP_REG:
+            candidate = known_registers.get(register_key(ins, source.reg))
+            if candidate is not None and len(candidate) >= width:
+                payload = candidate[:width]
+        if payload is None:
+            unknown.update(range(offset, offset + width))
+            continue
+        if not any(payload):
+            continue
+        for index, value in enumerate(payload):
+            if value:
+                values[offset + index].add(value)
+
+    eligible = [len(byte_values) == 1 and index not in unknown
+                for index, byte_values in enumerate(values)]
+    runs = []
+    position = 0
+    while position < size:
+        if not eligible[position]:
+            position += 1
+            continue
+        end = position + 1
+        while (end < size and eligible[end]
+               and end - position < 16):
+            end += 1
+        payload = bytes(next(iter(values[index])) for index in range(position, end))
+        runs.append((position, payload))
+        position = end
+    if not runs:
+        raise ValueError("native constructor has no deterministic initializers")
+    return tuple(runs)
+
+
 # These two 4.00 prefixes start one byte past the mapped base. The supplied
 # runtime log resolves OpenVideo at +0x340, while the Avcap2 prefix has its
 # prologue at file +0x33f and matches 4.51 text byte-for-byte after that shift.
@@ -305,7 +396,7 @@ def constructor_layout_packed_simd(data: bytes, size: int, starts: list) -> dict
                 and image_disp - base + image_size == size
                 and mask_disp - base + 0x24 == size):
             continue
-        candidates.append({
+        candidate = {
             "constructor": addr,
             "rate_group": rate_disp - base,
             "rate_group_size": rate_size,
@@ -318,7 +409,9 @@ def constructor_layout_packed_simd(data: bytes, size: int, starts: list) -> dict
             "image_paste": paste_disp - base,
             "video_mode": mask_disp - 4 - base,
             "mask_mode": mask_disp - base,
-        })
+        }
+        candidate["initializers"] = request_initializers(data, addr, size, base)
+        candidates.append(candidate)
 
     return candidates[0] if len(candidates) == 1 else None
 
@@ -474,6 +567,11 @@ def constructor_layout_simd(data: bytes, size: int) -> dict:
         if (candidate["image_group"] + isize != size
                 or candidate["height"] >= candidate["image_paste"]):
             continue
+        # The profile keeps the header-store RVA for diagnostics, but SIMD
+        # constants are loaded immediately before that store. Start constant
+        # recovery at the uniquely matched RIP-relative header load.
+        candidate["initializers"] = request_initializers(
+            data, addr, size, base)
         candidates.append(candidate)
     if len(candidates) != 1:
         if not candidates:
@@ -548,7 +646,8 @@ def _constructor_layout(data: bytes, size: int) -> dict:
             "width": dimensions + 4 - 0x40, "height": dimensions + 8 - 0x40,
             "image_paste": image_marker - 0x40,
             "mask_mode": mask_mode - 0x40,
-            "video_mode": mask_mode - 4 - 0x40}
+            "video_mode": mask_mode - 4 - 0x40,
+            "initializers": request_initializers(data, pos, size, 0x40)}
 
 
 def fw_name(fw: int) -> str:
@@ -574,7 +673,17 @@ def render_profile(fw: int, result: dict) -> str:
     if reason:
         lines += [f"// EXPERIMENTAL: {reason}.",
                   f"// Disabled in normal payload builds: compile with -D{gate_define(fw)}."]
-    lines += ['#include "platform/ps5/offset/profile.h"', "",
+    symbol = f"pbs_ps5_initializers_{fw_name(fw)}"
+    initializers = result.get("initializers", ())
+    lines += ['#include "platform/ps5/offset/profile.h"', ""]
+    if initializers:
+        lines += [f"static const pbs_ps5_request_initializer {symbol}[] = {{"]
+        for offset, payload in initializers:
+            byte_list = ", ".join(f"0x{value:02x}" for value in payload)
+            lines.append(f"  {{ .offset = {h(offset)}, .size = {h(len(payload))}, "
+                         f".bytes = {{ {byte_list} }} }},")
+        lines += ["};", ""]
+    lines += [
              f"const pbs_ps5_offset_profile pbs_ps5_offsets_{fw_name(fw)} = {{",
              f"  .firmware = 0x{fw:08x}u,",
              "  .avcap2 = {",
@@ -600,6 +709,9 @@ def render_profile(fw: int, result: dict) -> str:
               f"    .mask_mode_offset = {h(result['mask_mode'])},"]
     if result.get("mask_span", 0x24) != 0x24:
         lines.append(f"    .mask_span = {h(result['mask_span'])},")
+    if initializers:
+        lines += [f"    .initializers = {symbol},",
+                  f"    .initializer_count = {h(len(initializers))},"]
     lines += ["  },", "};"]
     return "\n".join(lines) + "\n"
 
