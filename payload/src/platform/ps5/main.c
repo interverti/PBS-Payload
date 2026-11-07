@@ -674,7 +674,7 @@ avopen_retry:;
     if (pbs_ps5_worker_boot(&ctx, f)) {
       fprintf(f,
               "PS5 worker unavailable; refusing sustained capture with SceRemotePlay traced\n");
-      pbs_inject_end(&ctx);
+      if (ctx.attached) pbs_inject_end(&ctx);
       fclose(f);
       notify("PBS: Remote Play worker unavailable; capture not started");
       return 1;
@@ -841,8 +841,12 @@ avopen_retry:;
       long ar = call(&ctx, fn_set, (uint64_t[6]){grant_feature, (uint64_t)callback, 0, 0, 0, 0});
       fprintf(f, "SetCallback(%u) -> %s\n", grant_feature, fmt_rc(ar));
       if (ar==LONG_MIN || ctx.asserted) { owned.uncertain=1; goto avopen_cleanup; }
-      if ((int32_t)(uint32_t)ar < 0) goto avopen_cleanup;
-      owned.callback = 1;
+      if ((int32_t)(uint32_t)ar < 0 &&
+          !pbs_ps5_callback_already_registered(ar)) goto avopen_cleanup;
+      if (pbs_ps5_callback_already_registered(ar))
+        fprintf(f, "Resource callback already registered; borrowing without ClearCallback ownership\n");
+      else
+        owned.callback = 1;
       char state[32] = "RUNNING";
       memcpy(scratch_zero + 0x600, state, sizeof state);
       if (pbs_inject_write(&ctx, scratch_zero, 0x800)) goto avopen_cleanup;

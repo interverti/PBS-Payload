@@ -18,6 +18,10 @@ static int release(void *opaque, pbs_ps5_release_step step) {
 }
 
 int main(void) {
+  assert(pbs_ps5_callback_already_registered((long)0x819b0007u));
+  assert(!pbs_ps5_callback_already_registered(0));
+  assert(!pbs_ps5_callback_already_registered((long)0x819b0006u));
+
   /* Reopening must not accumulate our Initialize references or consume the
    * references held by native RemotePlay and another client. */
   fixture f = {.references = 2};
@@ -67,6 +71,15 @@ int main(void) {
     if (mask & 1) assert(f.sequence[next++] == PBS_PS5_RELEASE_INITIALIZE);
     assert(f.calls == next && f.references == 2);
   }
+
+  /* A pre-existing callback is borrowed: release our RUNNING transition and
+   * Initialize reference, but never clear somebody else's callback. */
+  pbs_ps5_capture_ownership borrowed = {1, 0, 1, 0};
+  f = (fixture){.references = 3};
+  assert(!pbs_ps5_release_capture(&borrowed, 1, release, &f));
+  assert(f.calls == 2 && f.references == 2);
+  assert(f.sequence[0] == PBS_PS5_RELEASE_STOP);
+  assert(f.sequence[1] == PBS_PS5_RELEASE_INITIALIZE);
   puts("PS5 capture cleanup: ownership, release ordering and failure tests passed");
   return 0;
 }

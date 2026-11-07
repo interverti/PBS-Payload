@@ -19,7 +19,7 @@ typedef struct {
   int (*insert)(int, const void *);
   int (*remove)(int);
   uint32_t device;
-  int ready, privileged, owned, uncertain;
+  int ready, privileged, owned, uncertain, unhealthy;
 } native_pad;
 static native_pad pad;
 #ifndef PBS_CONTROLLER_LOG
@@ -41,9 +41,15 @@ static int prepare(void) {
   if (kernel_dynlib_handle(getpid(), "libScePad.sprx", &module)) {
     int rc = sceKernelLoadStartModule("/system/common/lib/libScePad.sprx", 0, NULL, 0, NULL, NULL);
     log_result("Load libScePad", rc);
-    if (rc < 0 || kernel_dynlib_handle(getpid(), "libScePad.sprx", &module)) {
+    /* LoadStartModule returns the loaded module handle on success.  Do not
+     * discard it and look the module up by name again: on newer firmwares
+     * (observed on 10.60) the load succeeds with e.g. 0x2023 while the
+     * immediate name lookup still fails, preventing all controller exports
+     * from being resolved. */
+    if (rc <= 0) {
       return -1;
     }
+    module = (uint32_t)rc;
   }
   pad.init = (void *)kernel_dynlib_dlsym(getpid(), module, "scePadInit");
   pad.privilege = (void *)kernel_dynlib_dlsym(getpid(), module, "scePadSetProcessPrivilege");
@@ -65,7 +71,7 @@ static int prepare(void) {
 }
 static int connect_pad(void *unused) {
   (void)unused;
-  if (pad.uncertain) {
+  if (pad.uncertain || pad.unhealthy) {
     return -1;
   }
   int rc = prepare();
@@ -124,6 +130,9 @@ static int write_pad(void *unused, const pbs_input_state *state) {
   memcpy(data + 0x18, &orientation_w, 4);
   int rc = pad.insert((int)pad.device, data);
   if (rc) {
+    /* The ID is known, so final teardown remains safe, but do not reuse this
+     * device for a new viewer session after its data path failed. */
+    pad.unhealthy = 1;
     log_result("VirtualDeviceInsertData", rc);
   }
   return rc;
@@ -132,6 +141,10 @@ static int disconnect_pad(void *unused) {
   (void)unused;
   if (pad.uncertain) {
     log_result("Unknown device ID; no blind delete or reconnect", -1);
+    return -1;
+  }
+  if (pad.unhealthy) {
+    log_result("Virtual device quarantined; reconnect disabled until teardown", -1);
     return -1;
   }
   /* Session release only: keep the device and process privilege registered
@@ -162,6 +175,7 @@ static int destroy_pad(void *unused) {
     pad.privileged = 0;
   }
   pad.ready = 0;
+  pad.unhealthy = 0;
   return 0;
 }
 void pbs_ps5_controller_configure(void) {

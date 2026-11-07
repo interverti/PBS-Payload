@@ -24,6 +24,10 @@ typedef struct {
   intptr_t fn_join;
   intptr_t fn_munmap;
   int running;
+  /* A late bootstrap/shutdown failure can leave a live thread or mapping in
+   * the target.  Keep its identity and refuse another boot rather than
+   * overwriting the only information that could explain or clean it up. */
+  int quarantined;
 } pbs_ps5_worker_state;
 
 static pbs_ps5_worker_state worker = {
@@ -105,17 +109,33 @@ static int cleanup_mapping(FILE *log, int join_thread) {
   return result;
 }
 
-static void discard_attached_mapping(pbs_inject_t *ctx, FILE *log) {
-  if (!ctx || !ctx->attached || !worker.map || !worker.fn_munmap) return;
+static int discard_attached_mapping(pbs_inject_t *ctx, FILE *log) {
+  if (!ctx || !ctx->attached || !worker.map || !worker.fn_munmap) return -1;
   long rc = pbs_inject_call_fast(
       ctx, worker.fn_munmap,
       (uint64_t[6]){(uint64_t)worker.map, worker.map_size, 0, 0, 0, 0});
   fprintf(log, "PS5 worker rollback: munmap(%p,0x%zx) -> 0x%08lx\n",
           (void *)worker.map, worker.map_size, (unsigned long)rc);
+  return rc != PBS_CALL_TIMEOUT && (int32_t)(uint32_t)rc == 0 ? 0 : -1;
+}
+
+static void reset_worker(void) {
+  memset(&worker, 0, sizeof worker);
+  worker.link.listen_fd = worker.link.fd = -1;
+}
+
+static void quarantine_worker(FILE *log, const char *reason) {
+  worker.running = 0;
+  worker.quarantined = 1;
+  fprintf(log, "PS5 worker quarantined: %s; no automatic reboot\n", reason);
 }
 
 int pbs_ps5_worker_boot(pbs_inject_t *ctx, FILE *log) {
-  if (!ctx || !log || !ctx->attached || worker.running) return -1;
+  if (!ctx || !log || !ctx->attached) return -1;
+  if (worker.running || worker.quarantined || worker.map) {
+    fprintf(log, "PS5 worker: existing or uncertain state blocks bootstrap\n");
+    return -1;
+  }
 
   const size_t blob =
       (size_t)(__stop_pbs_worker_remote - __start_pbs_worker_remote);
@@ -194,20 +214,20 @@ int pbs_ps5_worker_boot(pbs_inject_t *ctx, FILE *log) {
   if (pbs_inject_write_at(ctx, worker.map, __start_pbs_worker_remote, blob) ||
       pbs_inject_write_at(ctx, arg, &remote, sizeof remote)) {
     fprintf(log, "PS5 worker: mapping write failed errno=%d\n", errno);
-    discard_attached_mapping(ctx, log);
+    int rollback = discard_attached_mapping(ctx, log);
     pbs_worker_link_close(&worker.link);
-    memset(&worker, 0, sizeof worker);
-    worker.link.listen_fd = worker.link.fd = -1;
+    if (rollback) quarantine_worker(log, "mapping write rollback failed");
+    else reset_worker();
     return -1;
   }
 
   if (kernel_set_vmem_protection(ctx->pid, worker.map, worker.map_size,
                                  PROT_READ | PROT_EXEC)) {
     fprintf(log, "PS5 worker: RW->RX protection failed errno=%d\n", errno);
-    discard_attached_mapping(ctx, log);
+    int rollback = discard_attached_mapping(ctx, log);
     pbs_worker_link_close(&worker.link);
-    memset(&worker, 0, sizeof worker);
-    worker.link.listen_fd = worker.link.fd = -1;
+    if (rollback) quarantine_worker(log, "protection rollback failed");
+    else reset_worker();
     return -1;
   }
 
@@ -215,13 +235,19 @@ int pbs_ps5_worker_boot(pbs_inject_t *ctx, FILE *log) {
       ctx, fn_create,
       (uint64_t[6]){(uint64_t)(ctx->scratch + PBS_PS5_WORKER_THREAD_OFF), 0,
                     (uint64_t)worker.map, (uint64_t)arg, 0, 0});
-  if (rc == PBS_CALL_TIMEOUT || (int32_t)(uint32_t)rc != 0) {
+  if (rc == PBS_CALL_TIMEOUT) {
+    fprintf(log, "PS5 worker: pthread_create outcome uncertain\n");
+    pbs_worker_link_close(&worker.link);
+    quarantine_worker(log, "pthread_create timed out");
+    return -1;
+  }
+  if ((int32_t)(uint32_t)rc != 0) {
     fprintf(log, "PS5 worker: pthread_create failed result=0x%016lx\n",
             (unsigned long)rc);
-    discard_attached_mapping(ctx, log);
+    int rollback = discard_attached_mapping(ctx, log);
     pbs_worker_link_close(&worker.link);
-    memset(&worker, 0, sizeof worker);
-    worker.link.listen_fd = worker.link.fd = -1;
+    if (rollback) quarantine_worker(log, "pthread_create rollback failed");
+    else reset_worker();
     return -1;
   }
   if (pbs_inject_read_at(ctx, ctx->scratch + PBS_PS5_WORKER_THREAD_OFF,
@@ -230,6 +256,7 @@ int pbs_ps5_worker_boot(pbs_inject_t *ctx, FILE *log) {
     fprintf(log, "PS5 worker: created thread handle could not be read\n");
     pbs_inject_end(ctx);
     pbs_worker_link_close(&worker.link);
+    quarantine_worker(log, "created thread handle unavailable");
     return -1;
   }
 
@@ -242,9 +269,8 @@ int pbs_ps5_worker_boot(pbs_inject_t *ctx, FILE *log) {
   if (pbs_worker_link_accept(&worker.link, 5000)) {
     fprintf(log, "PS5 worker: connection timeout; joining bootstrap thread\n");
     pbs_worker_link_close(&worker.link);
-    cleanup_mapping(log, 1);
-    memset(&worker, 0, sizeof worker);
-    worker.link.listen_fd = worker.link.fd = -1;
+    if (cleanup_mapping(log, 1)) quarantine_worker(log, "connection-timeout cleanup failed");
+    else reset_worker();
     return -1;
   }
 
@@ -253,9 +279,8 @@ int pbs_ps5_worker_boot(pbs_inject_t *ctx, FILE *log) {
     fprintf(log, "PS5 worker: private scratch handshake failed\n");
     (void)pbs_worker_link_exit(&worker.link);
     pbs_worker_link_close(&worker.link);
-    cleanup_mapping(log, 1);
-    memset(&worker, 0, sizeof worker);
-    worker.link.listen_fd = worker.link.fd = -1;
+    if (cleanup_mapping(log, 1)) quarantine_worker(log, "handshake cleanup failed");
+    else reset_worker();
     return -1;
   }
 
@@ -271,18 +296,22 @@ int pbs_ps5_worker_boot(pbs_inject_t *ctx, FILE *log) {
 }
 
 int pbs_ps5_worker_shutdown(FILE *log) {
+  if (worker.quarantined) {
+    fprintf(log, "PS5 worker shutdown: quarantined state retained\n");
+    return -1;
+  }
   if (!worker.running) return 0;
   int exit_rc = pbs_worker_link_exit(&worker.link);
   pbs_inject_set_worker_hooks(NULL, NULL, NULL);
   pbs_worker_link_close(&worker.link);
   worker.running = 0;
   if (exit_rc) {
-    fprintf(log,
-            "PS5 worker shutdown: RPC exit uncertain; no join/unmap attempted\n");
+    fprintf(log, "PS5 worker shutdown: RPC exit uncertain; no join/unmap attempted\n");
+    quarantine_worker(log, "RPC exit uncertain");
     return -1;
   }
   int cleanup_rc = cleanup_mapping(log, 1);
-  memset(&worker, 0, sizeof worker);
-  worker.link.listen_fd = worker.link.fd = -1;
+  if (cleanup_rc) quarantine_worker(log, "joined cleanup failed");
+  else reset_worker();
   return cleanup_rc;
 }

@@ -50,6 +50,9 @@ run worker-socket -pthread tests/ps4/worker/socket.c payload/src/platform/ps4/wo
 run worker-shared -pthread tests/ps4/worker/shared_memory.c payload/src/platform/ps4/worker/client.c payload/src/platform/ps4/worker/remote.c payload/src/platform/ps4/worker/entry.S
 run worker-boot -DPBS_PS4 tests/ps4/worker/boot.c payload/src/platform/ps4/worker/boot.c payload/src/platform/ps4/worker/remote.c
 run ps5-worker tests/ps5/worker_boot.c payload/src/platform/ps5/worker.c payload/src/platform/ps4/worker/remote.c
+"$out/ps5-worker" create-timeout
+"$out/ps5-worker" handle-read
+"$out/ps5-worker" exit-failure
 run ps5-capture-fallback tests/ps5/test_capture_fallback.c
 run worker-probe -DPBS_PS4 tests/ps4/diagnostics/worker_probe.c payload/src/platform/ps4/diagnostics/worker_probe.c
 for worker in 0 1; do

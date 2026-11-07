@@ -21,6 +21,9 @@
 #define FN_MUNMAP ((intptr_t)4)
 
 static int detached, attached, protected, joined, unmapped, exited;
+enum { SCENARIO_OK, SCENARIO_CREATE_TIMEOUT, SCENARIO_HANDLE_READ,
+       SCENARIO_EXIT_FAILURE };
+static int scenario;
 static pbs_worker_call_hook call_hook;
 static pbs_worker_read_hook read_hook;
 static pbs_worker_write_hook write_hook;
@@ -63,6 +66,7 @@ int pbs_inject_read_at(pbs_inject_t *ctx, intptr_t address, void *output,
                        size_t length) {
   assert(ctx->attached && address == STACK_SCRATCH + 0x700 &&
          length == sizeof(uint64_t));
+  if (scenario == SCENARIO_HANDLE_READ) return -1;
   memcpy(output, &(uint64_t){THREAD}, length);
   return 0;
 }
@@ -79,6 +83,7 @@ long pbs_inject_call_fast(pbs_inject_t *ctx, intptr_t fn,
   if (fn == FN_CREATE) {
     assert(args[0] == STACK_SCRATCH + 0x700 && args[1] == 0 &&
            args[2] == MAP_ADDRESS && args[3] > MAP_ADDRESS);
+    if (scenario == SCENARIO_CREATE_TIMEOUT) return PBS_CALL_TIMEOUT;
     return 0;
   }
   if (fn == FN_JOIN) {
@@ -147,21 +152,55 @@ int pbs_worker_link_write(pbs_worker_link *link, uint64_t address,
 int pbs_worker_link_exit(pbs_worker_link *link) {
   (void)link;
   ++exited;
-  return 0;
+  return scenario == SCENARIO_EXIT_FAILURE ? -1 : 0;
 }
 void pbs_worker_link_close(pbs_worker_link *link) { (void)link; }
 
-int main(void) {
-  pbs_inject_t ctx = {.pid = PID,
-                      .scratch = STACK_SCRATCH,
-                      .scratch_len = 0x1000,
-                      .attached = 1};
+static pbs_inject_t context(void) {
+  return (pbs_inject_t){.pid = PID, .scratch = STACK_SCRATCH,
+                        .scratch_len = 0x1000, .attached = 1};
+}
+
+int main(int argc, char **argv) {
+  if (argc > 1 && !strcmp(argv[1], "create-timeout")) scenario = SCENARIO_CREATE_TIMEOUT;
+  else if (argc > 1 && !strcmp(argv[1], "handle-read")) scenario = SCENARIO_HANDLE_READ;
+  else if (argc > 1 && !strcmp(argv[1], "exit-failure")) scenario = SCENARIO_EXIT_FAILURE;
+  pbs_inject_t ctx = context();
   FILE *log = tmpfile();
   assert(log);
+  if (scenario == SCENARIO_CREATE_TIMEOUT) {
+    assert(pbs_ps5_worker_boot(&ctx, log) && ctx.attached);
+    pbs_inject_end(&ctx);
+    assert(!unmapped && !joined && pbs_ps5_worker_shutdown(log));
+    ctx = context();
+    assert(pbs_ps5_worker_boot(&ctx, log) && ctx.attached);
+    fclose(log);
+    puts("PS5 worker: uncertain pthread_create quarantined without unmap or reboot");
+    return 0;
+  }
+  if (scenario == SCENARIO_HANDLE_READ) {
+    assert(pbs_ps5_worker_boot(&ctx, log) && !ctx.attached);
+    assert(!unmapped && !joined && pbs_ps5_worker_shutdown(log));
+    ctx = context();
+    assert(pbs_ps5_worker_boot(&ctx, log) && ctx.attached);
+    fclose(log);
+    puts("PS5 worker: unreadable created-thread handle quarantined without double detach");
+    return 0;
+  }
   assert(pbs_ps5_worker_boot(&ctx, log) == 0);
   assert(!ctx.attached && ctx.worker && ctx.scratch == PRIVATE_SCRATCH);
   assert(protected == 1 && detached == 1 && call_hook && read_hook && write_hook);
   assert(call_hook(0x123, (uint64_t[6]){0}) == 7);
+  if (scenario == SCENARIO_EXIT_FAILURE) {
+    assert(pbs_ps5_worker_shutdown(log));
+    assert(exited == 1 && !joined && !unmapped && !call_hook && !read_hook && !write_hook);
+    assert(pbs_ps5_worker_shutdown(log) && exited == 1);
+    ctx = context();
+    assert(pbs_ps5_worker_boot(&ctx, log) && ctx.attached);
+    fclose(log);
+    puts("PS5 worker: uncertain RPC exit quarantined without join, unmap or reboot");
+    return 0;
+  }
   assert(pbs_ps5_worker_shutdown(log) == 0);
   assert(exited == 1 && attached == 1 && detached == 2 && joined == 1 &&
          unmapped == 1 && !call_hook && !read_hook && !write_hook);

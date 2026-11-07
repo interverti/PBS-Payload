@@ -8,6 +8,7 @@ static const pbs_input_backend *configured;
 static uint32_t firmware = 0x09400008;
 static int init_rc, add_rc, delete_rc, privilege_rc, insert_rc;
 static int init_calls, add_calls, delete_calls, privilege_value, missing_export, invalid_id;
+static int require_load, module_loaded, load_calls, load_rc;
 static unsigned char inserted[0x80];
 
 uint32_t kernel_get_fw_version(void) {
@@ -19,6 +20,9 @@ void pbs_input_configure(const pbs_input_backend *backend, void *opaque) {
 }
 int kernel_dynlib_handle(pid_t pid, const char *name, uint32_t *handle) {
   assert(pid == getpid() && !strcmp(name, "libScePad.sprx"));
+  if (require_load && !module_loaded) {
+    return -1;
+  }
   *handle = 1;
   return 0;
 }
@@ -30,8 +34,10 @@ int sceKernelLoadStartModule(const char *name, size_t size, const void *args, ui
   (void)flags;
   (void)options;
   (void)result;
-  assert(!"module already present in this mock");
-  return -1;
+  assert(!strcmp(name, "/system/common/lib/libScePad.sprx"));
+  load_calls++;
+  module_loaded = 1;
+  return load_rc;
 }
 static int mock_init(void) {
   init_calls++;
@@ -67,7 +73,7 @@ static int mock_delete(int device) {
   return delete_rc;
 }
 intptr_t kernel_dynlib_dlsym(pid_t pid, uint32_t module, const char *name) {
-  assert(pid == getpid() && module == 1);
+  assert(pid == getpid() && module == (require_load ? 0x2023u : 1u));
   if (missing_export && !strcmp(name, "scePadVirtualDeviceInsertData")) {
     return -1;
   }
@@ -93,6 +99,8 @@ static void reset(void) {
   memset(&pad, 0, sizeof pad);
   init_rc = add_rc = delete_rc = privilege_rc = insert_rc = 0;
   init_calls = add_calls = delete_calls = privilege_value = missing_export = invalid_id = 0;
+  require_load = module_loaded = load_calls = 0;
+  load_rc = 0x2023;
 }
 int main(void) {
   static const uint32_t firmwares[] = {0x03200004, 0x04000042, 0x04510001, 0x05000040, 0x05100023,
@@ -112,6 +120,18 @@ int main(void) {
   pbs_ps5_controller_configure();
   assert(!configured);
   firmware = 0x09400008;
+
+  reset();
+  require_load = 1;
+  assert(!connect_pad(NULL) && load_calls == 1 && init_calls == 1 && pad.owned);
+  assert(!connect_pad(NULL) && load_calls == 1 && add_calls == 1);
+  assert(!destroy_pad(NULL));
+
+  reset();
+  require_load = 1;
+  load_rc = 0;
+  assert(connect_pad(NULL) && load_calls == 1 && !init_calls && !add_calls);
+  assert(!destroy_pad(NULL));
 
   reset();
   missing_export = 1;
@@ -154,7 +174,13 @@ int main(void) {
   assert(!memcmp(inserted, expected, sizeof expected));
   insert_rc = -10;
   assert(write_pad(NULL, &state) == -10);
+  assert(pad.unhealthy && disconnect_pad(NULL));
+  assert(connect_pad(NULL) && add_calls == 1);
   insert_rc = 0;
+  assert(!destroy_pad(NULL) && !pad.unhealthy && !pad.owned && privilege_value == 0);
+
+  reset();
+  assert(!connect_pad(NULL) && pad.owned && privilege_value == 1);
   delete_rc = -11;
   assert(!disconnect_pad(NULL) && pad.owned && privilege_value == 1 && !delete_calls);
   assert(!connect_pad(NULL) && add_calls == 1);

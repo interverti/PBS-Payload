@@ -32,6 +32,9 @@ execution; the virtual controller survives viewer reconnects until shutdown.
   per-field initializers, with the generator refusing dynamic or conflicting
   stores. The catalogue is tested offline; it is not applied to the synthetic
   request in this release.
+- Treat ResourceArbitrator `0x819b0007` as an already-registered callback:
+  continue with a borrowed registration and, if PBS's RUNNING transition
+  succeeds, balance it with STOP without clearing another owner's callback.
 
 ### Controller
 
@@ -41,6 +44,12 @@ execution; the virtual controller survives viewer reconnects until shutdown.
   stopped. This removes the repeated `AddDevice`/`DeleteDevice` churn that
   exhausted the `libScePad` device pool across reconnects. Process privilege is
   retained until the same shutdown.
+- Use the positive module handle returned by `sceKernelLoadStartModule()`
+  directly. This fixes firmwares such as 10.60 where `libScePad` loads as
+  `0x2023` but an immediate lookup by basename still fails.
+- Quarantine a virtual device after `InsertData` fails. Reconnect is disabled
+  for that payload execution, while final shutdown can still delete the known
+  device ID without blind retries or pool churn.
 
 ### Worker and tooling
 
@@ -52,6 +61,10 @@ execution; the virtual controller survives viewer reconnects until shutdown.
 - Extend the offline suite with PS5 worker boot/shutdown, 24-profile request
   signature and initializer checks, capture quarantine tests and persistent
   controller lifecycle tests.
+- Preserve and quarantine worker state after ambiguous `pthread_create`,
+  unreadable thread handles, uncertain RPC exit or failed cleanup. A second
+  bootstrap cannot overwrite a possibly live mapping, and late boot failures
+  no longer cause a second detach in the caller.
 
 ### Known limits
 
