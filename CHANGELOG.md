@@ -3,15 +3,60 @@
 Notable changes to PBS Payload. `VERSION` at the repository root holds the
 numeric version; a release tag may add a suffix (`v0.2.0-beta.1`).
 
-## Unreleased
+## v0.4.0-beta.2 — 2026-11-07
 
-- Add the measured PS5 5.10 profile for firmware `0x05100023`, with its own
-  `0x298` request and short mask tail. Other 5.10 builds remain unrecognized.
-- Use the native legacy resolution table on 5.10: automatic 1080p startup,
-  2160p enum 5, no 1440p option. Default bitrate remains 60 Mbps.
-- Pass the granted video resource feature to OpenAudio, fixing the 4K
-  request mismatch (video feature 10 versus the previous audio feature 12).
-  Console confirmation of 5.10 capture and restored 4K audio is pending.
+Beta, pre-release. Changes since `v0.4.0-beta.1`: PS5 capture now runs through
+a detached worker and does not retry a rejected `OpenVideo` in the same payload
+execution; the virtual controller survives viewer reconnects until shutdown.
+
+### PS5 capture
+
+- Boot a private RPC worker inside `SceRemotePlay`, then detach ptrace. The
+  bootstrap resolves its exports by name, allocates its own RW mapping and
+  switches it to RX; it uses no firmware offsets and does not overwrite
+  executable padding. Sustained capture is refused if the worker cannot start.
+  Shutdown sends the worker exit command, joins it and releases the mapping.
+- Quarantine a failed `OpenVideo`. A successful `STOP`/`ClearCallback`/
+  `Terminate` sequence proves only that PBS released its public objects, not
+  that the backend freed the encoder slot, so a retry could keep returning
+  `0x80c78000`. The payload now reopens capture only after it owned and closed
+  a real video handle in the same execution.
+- Remove the automatic 1080p retry after a `0x81950008` rejection. For the
+  automatic 1440p profile on 10.01 (`0x10010000`), start at 1080p before the
+  first open instead; explicit 1440p and 4K requests are unchanged.
+- Find and validate the native `SceRemotePlay` request in target memory for the
+  requested geometry, feature, usage, resolution and frame-rate mode. This
+  release logs the result in `inject.txt` with reuse disabled: the payload
+  still builds its synthetic request.
+- Record the deterministic constructor writes for all 24 exact PS5 profiles as
+  per-field initializers, with the generator refusing dynamic or conflicting
+  stores. The catalogue is tested offline; it is not applied to the synthetic
+  request in this release.
+
+### Controller
+
+- Keep the virtual PS5 controller device for the payload lifetime. A viewer
+  disconnect only ends the session; `connect` reuses the existing device and
+  `pbs_input_shutdown()` performs the final delete after the input thread has
+  stopped. This removes the repeated `AddDevice`/`DeleteDevice` churn that
+  exhausted the `libScePad` device pool across reconnects. Process privilege is
+  retained until the same shutdown.
+
+### Worker and tooling
+
+- Raise the worker RPC copy limit to 2 MiB and use inline byte-copy helpers in
+  the relocated remote blob, so large frame reads do not depend on compiler
+  helpers outside the mapping.
+- Add the PS5 worker, request-template matcher and shared PS4 worker sources to
+  both build scripts.
+- Extend the offline suite with PS5 worker boot/shutdown, 24-profile request
+  signature and initializer checks, capture quarantine tests and persistent
+  controller lifecycle tests.
+
+### Known limits
+
+- The PS5 worker bootstrap and native request matcher are covered by host-side
+  tests; a console smoke test remains the final step before publishing the build.
 
 ## v0.2.0-beta.1 — 2026-10-29
 
