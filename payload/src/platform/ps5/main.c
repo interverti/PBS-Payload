@@ -34,6 +34,7 @@
 #include "platform/ps5/request_template.h"
 #include "platform/ps5/worker.h"
 
+#define PBS_PS5_RUNTIME_REVISION "native-request-v2"
 
 
 /* An interrupted remote call may still have acquired resources. Do not issue
@@ -580,6 +581,9 @@ int main(int argc, char **argv) {
     uint32_t firmware = kernel_get_fw_version();
     fprintf(startup_report, "PBS startup firmware=0x%08x capture_profile=%s\n",
             firmware, pbs_ps5_find_offsets(firmware) ? "available" : "missing");
+    fprintf(startup_report,
+            "Runtime revision=%s exact-initializers=1 safe-worker-diagnostics=1\n",
+            PBS_PS5_RUNTIME_REVISION);
     fprintf(startup_report, "Controller compiled=%d enabled=%d\n",
             PBS_PS5_CONTROLLER, controller_enabled);
     fclose(startup_report);
