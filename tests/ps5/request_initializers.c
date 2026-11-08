@@ -49,7 +49,19 @@ int main(void) {
               (unsigned long long)image_desc);
       return 1;
     }
+    /* Production applies the native constants first and then overwrites
+     * caller-owned fields. Verify those dynamic writes win for every exact
+     * profile, including offsets that also have constructor defaults. */
+    const uint32_t usage = 2, resolution = 4, fps = 1, feature = 12;
+    memcpy(request + 0x14, &usage, sizeof usage);
+    memcpy(request + 0x18, &resolution, sizeof resolution);
+    memcpy(request + 0x1c, &fps, sizeof fps);
+    memcpy(request + 0x28, &feature, sizeof feature);
+    assert(!memcmp(request + 0x14, &usage, sizeof usage));
+    assert(!memcmp(request + 0x18, &resolution, sizeof resolution));
+    assert(!memcmp(request + 0x1c, &fps, sizeof fps));
+    assert(!memcmp(request + 0x28, &feature, sizeof feature));
   }
-  puts("PS5 native request initializers verified for all 24 exact firmware profiles");
+  puts("PS5 native request initializers and dynamic override order verified for all 24 exact profiles");
   return 0;
 }

@@ -30,8 +30,9 @@ execution; the virtual controller survives viewer reconnects until shutdown.
   still builds its synthetic request.
 - Record the deterministic constructor writes for all 24 exact PS5 profiles as
   per-field initializers, with the generator refusing dynamic or conflicting
-  stores. The catalogue is tested offline; it is not applied to the synthetic
-  request in this release.
+  stores. Exact profiles now apply these firmware-native constants before
+  overwriting caller-owned resolution, feature, frame-rate, rate and video-mode
+  fields. Family fallbacks remain explicitly synthetic in the runtime log.
 - Treat ResourceArbitrator `0x819b0007` as an already-registered callback:
   continue with a borrowed registration and, if PBS's RUNNING transition
   succeeds, balance it with STOP without clearing another owner's callback.
@@ -65,6 +66,9 @@ execution; the virtual controller survives viewer reconnects until shutdown.
   unreadable thread handles, uncertain RPC exit or failed cleanup. A second
   bootstrap cannot overwrite a possibly live mapping, and late boot failures
   no longer cause a second detach in the caller.
+- When capture uses the in-target worker, dependency diagnostics record export
+  RVAs without reading module text. This avoids faulting the worker on
+  execute-only mappings while preserving the RPC channel required for cleanup.
 
 ### Known limits
 

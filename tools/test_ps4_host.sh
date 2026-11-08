@@ -18,6 +18,7 @@ run ps5-capture-cleanup tests/ps5/capture_cleanup.c
 run ps5-capture-resolution tests/ps5/capture_resolution.c
 run ps5-request-initializers tests/ps5/request_initializers.c payload/src/platform/ps5/offset/*.c
 run ps5-request-template -DPBS_TEST tests/ps5/request_template.c payload/src/platform/ps5/request_template.c payload/src/platform/ps5/offset/*.c
+run ps5-offset-dump tests/ps5/offset_dump_dependencies.c payload/src/platform/ps5/offset_dump.c
 run ps5-capture-audio tests/ps5/capture_audio_request.c
 run ps5-controller tests/ps5/controller_backend.c payload/src/platform/ps5/offset/*.c
 run ps5-controller-disabled -pthread -DPBS_PS5_CONTROLLER=0 tests/ps5/controller_disabled.c payload/src/common/input/controller.c

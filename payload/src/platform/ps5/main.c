@@ -732,9 +732,23 @@ avopen_retry:;
       pbs_ps5_resolution_mode(capture_firmware,height,&requested_resolution);
       uint32_t resolution = requested_resolution;
       unsigned char *params = scratch_zero + 8;
-      fprintf(f, "Native request source=synthetic template-found=%d reuse-disabled catalogued-initializers=%u\n",
+      const int exact_profile = capture_firmware == layout->firmware;
+      if (exact_profile && pbs_ps5_apply_request_initializers(
+                               params, avcap->request_size, rp)) {
+        fprintf(f, "Native request initializer application failed; refusing incomplete exact profile\n");
+        (void)pbs_ps5_worker_shutdown(f);
+        pbs_inject_end(&ctx);
+        fclose(f);
+        notify("PBS: invalid native request initializer catalogue");
+        return 1;
+      }
+      fprintf(f, "Native request source=%s template-found=%d reuse-disabled applied-initializers=%u\n",
+              exact_profile ? "firmware-constructor" : "synthetic-family-fallback",
               native_template_found,
-              (unsigned)rp->initializer_count);
+              exact_profile ? (unsigned)rp->initializer_count : 0u);
+      /* Constructor constants establish the firmware-native nested request
+       * descriptors.  Caller-owned fields are deliberately written after
+       * them so runtime choices cannot be replaced by constructor defaults. */
       memcpy(scratch_zero + 8, &size, 8);
       memcpy(scratch_zero + 0x10, &common_size, 8);
       memcpy(scratch_zero + 8 + 0x14, &usage, 4);

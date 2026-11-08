@@ -63,6 +63,17 @@ void pbs_ps5_dump_dependencies(FILE *report, pbs_inject_t *ctx) {
         fprintf(report, "dependency dump: %s unresolved\n", name);
         continue;
       }
+      /* The detached worker executes inside the target.  Some firmwares map
+       * module text execute-only: reading those bytes from the worker can
+       * fault its thread and destroy the RPC channel needed for STOP and
+       * Terminate.  RVAs remain safe and sufficient for postmortem matching;
+       * byte fingerprints are collected only while ptrace serves reads. */
+      if (ctx->worker) {
+        fprintf(report, "dependency dump: %s +0x%" PRIxPTR
+                        " code-read-skipped-worker\n",
+                name, (uintptr_t)(address - base));
+        continue;
+      }
       unsigned char bytes[32];
       if (pbs_inject_read_at(ctx, address, bytes, sizeof bytes)) {
         fprintf(report, "dependency dump: %s +0x%" PRIxPTR " code-read-failed\n",
