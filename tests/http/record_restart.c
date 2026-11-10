@@ -56,7 +56,9 @@ int main(int argc, char **argv) {
   DIR *dir = opendir(argv[1]); assert(dir);
   struct dirent *entry; char path[512] = "";
   while ((entry = readdir(dir))) {
-    if (!strstr(entry->d_name, ".h264")) continue;
+    /* Skip the .h264.json sidecar; readdir order is filesystem-dependent. */
+    size_t name_len = strlen(entry->d_name);
+    if (name_len < 5 || strcmp(entry->d_name + name_len - 5, ".h264")) continue;
     int n = snprintf(path,sizeof path,"%s/%s",argv[1],entry->d_name);
     assert(n > 0 && n < (int)sizeof path);
     break;
