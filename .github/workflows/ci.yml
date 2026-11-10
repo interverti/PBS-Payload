@@ -36,8 +36,8 @@ jobs:
 
       - name: SDK installer and ELF verifier tests
         run: |
-          python3 -m unittest discover -s tests -p test_install_sdk.py
-          python3 -m unittest discover -s tests -p test_verify_ps5_elf.py
+          uv run --locked --group test python -m unittest discover -s tests -p test_install_sdk.py
+          uv run --locked --group test python -m unittest discover -s tests -p test_verify_ps5_elf.py
 
       - name: Compile and run the host regression (C, C++, Node, Python)
         # uv puts the locked env first on PATH so the script's python3 has capstone.
