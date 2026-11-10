@@ -41,7 +41,10 @@ jobs:
           sudo apt-get install -y -qq ffmpeg
 
       - name: Check the test tools are present
-        run: command -v ffmpeg ffprobe node
+        run: |
+          for tool in ffmpeg ffprobe node; do
+            command -v "$tool" || { echo "::error::$tool is missing"; exit 1; }
+          done
 
       - name: SDK installer and ELF verifier tests
         run: |
