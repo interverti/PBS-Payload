@@ -152,6 +152,7 @@ the other profiles were added.
 
 | Release | State |
 | --- | --- |
+| 14.00 | validated on hardware (fw `0x14008001`): kernel layout discovered at runtime (acmgr `+0x3b3830`, gates `+0x3673f5`/`+0x3678e1`), gates armed, ptrace identity adopted, Avcap Init/Open/Start all `0x0`, 720p worker backend streaming over HTTP |
 | 11.00 | validated on hardware: 720p worker backend, ~59.9 fps over 180 s sessions, video read through exported `sceVshAvcapReadVideo` |
 | 9.00 | kernel layout (acmgr + both gates) discovered at runtime; Avcap exports measured; capture internals not validated |
 | 6.72 | offset report and diagnostics only |
@@ -276,7 +277,8 @@ status and the log.
   the last step per release and some profiles have not had it yet.
 - **No native 4K, 120 fps or zero-latency claims.** 2160p is a selectable capture
   profile, not a promise about the encoder or the link.
-- **PS4 audio is disabled**, and PS4 capture outside 11.00 is unvalidated.
+- **PS4 audio is disabled.** PS4 capture is validated on 11.00 and 14.00 at 720p;
+  other PS4 firmwares remain unverified.
 - **Firmware outside the tables above is refused**, on purpose.
 - The desktop/mobile application is a separate project and is not part of this
   repository or its license grant.
