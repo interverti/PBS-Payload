@@ -51,7 +51,7 @@ jobs:
       platforms: ${{ steps.selection.outputs.platforms }}
       platforms_json: ${{ steps.selection.outputs.platforms_json }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Resolve the version against VERSION
         id: version
@@ -127,7 +127,7 @@ jobs:
             sdk_repo: ${{ vars.PS4_PAYLOAD_SDK_REPO }}
             sdk_ref: ${{ vars.PS4_PAYLOAD_SDK_REF }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Payload SDK
         uses: ./.github/actions/payload-sdk
@@ -179,7 +179,7 @@ jobs:
     steps:
       # gh infers the repository from a checkout; without it the download fails
       # with "failed to run git: fatal: not a git repository".
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download and verify every asset
         env:
@@ -207,7 +207,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download the verified assets
         env:
@@ -267,7 +267,7 @@ jobs:
       contents: write
     steps:
       # Same reason as the checksums job: gh release needs a repository context.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Leave the draft state
         env:
