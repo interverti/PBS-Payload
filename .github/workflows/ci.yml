@@ -39,7 +39,9 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
-          command -v ffmpeg ffprobe node
+
+      - name: Check the test tools are present
+        run: command -v ffmpeg ffprobe node
 
       - name: SDK installer and ELF verifier tests
         run: |
