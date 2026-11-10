@@ -746,6 +746,12 @@ avopen_retry:;
         notify("PBS: invalid native request initializer catalogue");
         return 1;
       }
+      /* The constructor's mode selector references descriptors that native
+       * RemotePlay fills after construction. PBS builds a synthetic request,
+       * so keep the proven kind=0 path instead of enabling that mode. */
+      size_t mode_begin = rp->rate.offset + rp->rate.size;
+      if (mode_begin < rp->image.offset)
+        memset(params + mode_begin, 0, rp->image.offset - mode_begin);
       fprintf(f, "Native request source=%s template-found=%d reuse-disabled applied-initializers=%u\n",
               exact_profile ? "firmware-constructor" : "synthetic-family-fallback",
               native_template_found,
