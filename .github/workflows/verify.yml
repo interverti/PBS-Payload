@@ -30,7 +30,7 @@ jobs:
       - name: Install the host toolchain
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq build-essential python3
+          sudo apt-get install -y -qq build-essential python3 python3-capstone
 
       - name: Offline PS4 regression (no console connection)
         run: bash tools/test_ps4_host.sh

@@ -196,9 +196,10 @@ than served with a geometry it was never measured on.
 
 ### Known limits
 
-- PS4 hardware capture is validated on 11.00 at 720p only (180 s sessions,
-  ~59.9 fps, decoded recording). Other PS4 firmwares remain unverified and PS4
-  audio is disabled.
+- PS4 hardware capture is validated on 11.00 (180 s sessions, ~59.9 fps, decoded
+  recording) and on 14.00 (fw `0x14008001`, 720p, runtime-discovered layout,
+  Avcap Init/Open/Start `0x0`, HTTP streaming), both at 720p. Other PS4 firmwares
+  remain unverified and PS4 audio is disabled.
 - PS5 profiles are verified by offline disassembly and bounds checks; a console
   smoke test is still the last step for each release. 4.00 was promoted from
   experimental to measured on 2026-10-29 after its dump was re-checked
