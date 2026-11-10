@@ -13,7 +13,9 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Only PR runs are cancelled; a quick second push to master must not cancel
+  # the first commit's result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -32,12 +34,17 @@ jobs:
         with:
           version-file: .github/uv/requirements.txt
 
+      - name: SDK installer and ELF verifier tests
+        run: |
+          python3 -m unittest discover -s tests -p test_install_sdk.py
+          python3 -m unittest discover -s tests -p test_verify_ps5_elf.py
+
       - name: Compile and run the host regression (C, C++, Node, Python)
         # uv puts the locked env first on PATH so the script's python3 has capstone.
-        run: uv run --frozen --group test bash tools/test_ps4_host.sh
+        run: uv run --locked --group test bash tools/test_ps4_host.sh
 
       - name: PS5 firmware audit tests
-        run: uv run --frozen --group test python -m unittest discover -s tests/ps5 -p test_firmware_audit.py -v
+        run: uv run --locked --group test python -m unittest discover -s tests/ps5 -p test_firmware_audit.py -v
 
       - name: PS5 9.40 diagnostics matrix
         run: sh tests/ps5/run_940_diagnostics.sh
@@ -84,5 +91,4 @@ jobs:
         run: |
           test -s "$ARTIFACT"
           file "$ARTIFACT" | grep -q 'ELF 64-bit'
-          python3 tools/verify_ps5_elf.py "$ARTIFACT"
           sha256sum "$ARTIFACT"
