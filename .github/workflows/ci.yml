@@ -30,7 +30,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: 0.13.5
+          version-file: .github/uv/requirements.txt
 
       - name: Compile and run the host regression (C, C++, Node, Python)
         # uv puts the locked env first on PATH so the script's python3 has capstone.

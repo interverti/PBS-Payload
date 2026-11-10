@@ -11,3 +11,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # Keeps the uv version used by setup-uv current (.github/uv/requirements.txt).
+  - package-ecosystem: pip
+    directory: /.github/uv
+    schedule:
+      interval: weekly
