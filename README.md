@@ -12,7 +12,7 @@
 [![C11](https://img.shields.io/badge/C-11-informational?style=flat-square&logo=c&logoColor=white)](https://en.cppreference.com/w/c/11)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-informational?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-PS5%20%7C%20PS4-blueviolet?style=flat-square)](#-supported-firmware)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue?style=flat-square)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue?style=flat-square)](VERSION)
 [![Firmware](https://img.shields.io/badge/PS5%20profiles-21%20measured-brightgreen?style=flat-square)](docs/PS5_FIRMWARE_OFFSETS.txt)
 
 <br/>
