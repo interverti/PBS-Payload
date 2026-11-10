@@ -95,3 +95,26 @@ jobs:
           file "$artifact"
           file "$artifact" | grep -q 'ELF 64-bit'
           sha256sum "$artifact"
+
+      - name: Build the PS4 read-only dumper
+        if: ${{ matrix.platform == 'ps4' }}
+        run: |
+          bash payload/build.sh ps4 dump
+          test -s payload/build/ps4/pbs-dump.elf
+          file payload/build/ps4/pbs-dump.elf | grep -q 'ELF 64-bit'
+          sha256sum payload/build/ps4/pbs-dump.elf
+
+      - name: Upload the ${{ matrix.platform }} payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: pbs-${{ matrix.platform }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+      - name: Upload the PS4 dumper
+        if: ${{ matrix.platform == 'ps4' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pbs-ps4-dump
+          path: payload/build/ps4/pbs-dump.elf
+          if-no-files-found: error
