@@ -34,7 +34,7 @@
 #include "platform/ps5/request_template.h"
 #include "platform/ps5/worker.h"
 
-#define PBS_PS5_RUNTIME_REVISION "native-request-v2"
+#define PBS_PS5_RUNTIME_REVISION "native-request-v3"
 
 
 /* An interrupted remote call may still have acquired resources. Do not issue
@@ -895,6 +895,9 @@ avopen_retry:;
       }
       fprintf(f, "Params videoOutMode=0x%x\n", video_mode);
     }
+    if (native_template_found)
+      pbs_ps5_dump_native_request_diff(f, scratch_zero + 8, native_request,
+                                       avcap->request_size, layout);
     if (offset_dump && !offset_dumped) {
       pbs_ps5_dump_export_offsets(f, ctx.pid);
       pbs_ps5_dump_request(f, "before OpenVideo", scratch_zero + 8, avcap->request_size);

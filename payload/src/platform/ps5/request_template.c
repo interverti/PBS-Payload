@@ -56,6 +56,71 @@ int pbs_ps5_native_request_matches_expected(
          request_u32(request + 0x1c) == fps_mode;
 }
 
+static int initializer_covers(const pbs_ps5_remoteplay_offsets *rp,
+                              size_t offset) {
+  if (!rp || !rp->initializers) return 0;
+  for (uint16_t i = 0; i < rp->initializer_count; ++i) {
+    const pbs_ps5_request_initializer *item = &rp->initializers[i];
+    if (offset >= item->offset && offset - item->offset < item->size) return 1;
+  }
+  return 0;
+}
+
+static int runtime_covers(const pbs_ps5_remoteplay_offsets *rp,
+                          size_t offset) {
+  static const struct { size_t offset, size; } common[] = {
+      {0x14, 4}, {0x18, 4}, {0x1c, 4}, {0x28, 4}};
+  for (size_t i = 0; i < sizeof common / sizeof common[0]; ++i)
+    if (offset >= common[i].offset &&
+        offset - common[i].offset < common[i].size) return 1;
+  const struct { size_t offset, size; } fields[] = {
+      {rp->rate.offset + 0x10, 0x14},
+      {rp->width_offset, 4}, {rp->height_offset, 4},
+      {rp->video_mode_offset, 4}};
+  for (size_t i = 0; i < sizeof fields / sizeof fields[0]; ++i)
+    if (offset >= fields[i].offset && offset - fields[i].offset < fields[i].size)
+      return 1;
+  return 0;
+}
+
+void pbs_ps5_dump_native_request_diff(
+    FILE *report, const unsigned char *built, const unsigned char *native,
+    size_t length, const pbs_ps5_offset_profile *profile) {
+  if (!report || !built || !native || !profile ||
+      length != profile->avcap2.request_size || length > 0x400) return;
+  size_t different = 0, initializer = 0, runtime = 0, residual = 0;
+  for (size_t i = 0; i < length; ++i) {
+    if (built[i] == native[i]) continue;
+    ++different;
+    if (initializer_covers(&profile->remoteplay, i)) ++initializer;
+    else if (runtime_covers(&profile->remoteplay, i)) ++runtime;
+    else ++residual;
+  }
+  fprintf(report,
+          "Native request diff: bytes=%zu initializer=%zu runtime=%zu residual=%zu\n",
+          different, initializer, runtime, residual);
+  unsigned emitted = 0;
+  for (size_t begin = 0; begin < length && emitted < 64;) {
+    while (begin < length && built[begin] == native[begin]) ++begin;
+    if (begin == length) break;
+    size_t end = begin + 1;
+    while (end < length && built[end] != native[end] && end - begin < 16) ++end;
+    const char *kind = initializer_covers(&profile->remoteplay, begin)
+                           ? "initializer"
+                           : runtime_covers(&profile->remoteplay, begin)
+                                 ? "runtime" : "residual";
+    fprintf(report, "Native request diff +0x%03zx..0x%03zx %s built=",
+            begin, end - 1, kind);
+    for (size_t i = begin; i < end; ++i) fprintf(report, "%02x", built[i]);
+    fputs(" native=", report);
+    for (size_t i = begin; i < end; ++i) fprintf(report, "%02x", native[i]);
+    fputc('\n', report);
+    begin = end;
+    ++emitted;
+  }
+  if (emitted == 64) fprintf(report, "Native request diff: output truncated\n");
+}
+
 #ifndef PBS_TEST
 #include <ps5/kernel.h>
 #include <ps5/mdbg.h>

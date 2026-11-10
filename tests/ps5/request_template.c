@@ -53,6 +53,27 @@ int main(void) {
     assert(!pbs_ps5_native_request_matches(
         request, profile->avcap2.request_size, profile));
   }
+  const pbs_ps5_offset_profile *profile = pbs_ps5_find_offsets(0x05500008u);
+  unsigned char built[0x400] = {0}, native[0x400] = {0};
+  assert(profile && !pbs_ps5_apply_request_initializers(
+      built, profile->avcap2.request_size, &profile->remoteplay));
+  memcpy(native, built, profile->avcap2.request_size);
+  native[0x30] ^= 1; /* constructor-owned */
+  native[0x14] ^= 1; /* runtime-owned */
+  native[0x40] ^= 1; /* neither catalogue */
+  FILE *report = tmpfile();
+  assert(report);
+  pbs_ps5_dump_native_request_diff(report, built, native,
+                                    profile->avcap2.request_size, profile);
+  assert(!fflush(report));
+  rewind(report);
+  char text[4096] = {0};
+  assert(fread(text, 1, sizeof text - 1, report) > 0);
+  fclose(report);
+  assert(strstr(text, "bytes=3 initializer=1 runtime=1 residual=1"));
+  assert(strstr(text, "+0x030..0x030 initializer"));
+  assert(strstr(text, "+0x014..0x014 runtime"));
+  assert(strstr(text, "+0x040..0x040 residual"));
   puts("PS5 live native request signatures verified for all 24 exact profiles");
   return 0;
 }
