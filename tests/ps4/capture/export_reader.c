@@ -68,8 +68,12 @@ int main(void) {
   unsigned char meta[0x40];
   read_result = PBS_WORKER_COPY_MAX + 17;
   assert(pbs_ps4_export_reader_read(&r, &ctx, (void *)0xdead, output,
+                                   sizeof output + 17, meta, 0) < 0);
+  assert(seen_capacity == sizeof output && copies == 0);
+  read_result = PBS_WORKER_COPY_MAX;
+  assert(pbs_ps4_export_reader_read(&r, &ctx, (void *)0xdead, output,
                                    sizeof output, meta, 0) == read_result);
-  assert(seen_flags == 1 && seen_capacity == sizeof output && copies == 3);
+  assert(seen_flags == 1 && seen_capacity == sizeof output && copies == 2);
   assert(!memcmp(output, memory+BUFFER, (size_t)read_result));
   for (unsigned i=0; i<sizeof meta; ++i) assert(meta[i] == 0x5a);
   int previous_copies = copies;
@@ -89,6 +93,6 @@ int main(void) {
   int previous_calls = calls;
   assert(pbs_ps4_export_reader_read(&r, &ctx, (void *)0xdead, output, 100, meta, 1) < 0);
   assert(calls == previous_calls);
-  puts("Exported ReadVideo: opaque handle, chunked keyframes, bounds, errors, release and timeout quarantine verified");
+  puts("Exported ReadVideo: opaque handle, frame capacity, bounds, errors, release and timeout quarantine verified");
   return 0;
 }
