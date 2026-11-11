@@ -3,6 +3,17 @@
 Notable changes to PBS Payload. `VERSION` at the repository root holds the
 numeric version; a release tag may add a suffix (`v0.2.0-beta.1`).
 
+## Unreleased
+
+### PS5 capture
+
+- Build FW 5.50 (`0x05500008`) requests with the proven synthetic path instead
+  of the firmware constructor constants. The exact profile from the dump is
+  kept for geometry, but hardware reported in issue #12 rejects the
+  constructor-built request with `0x81950001` on every attempt — the same
+  signature FW 9.40 showed before the beta.3 synthetic request was adopted.
+  The runtime log now says `synthetic-constructor-fallback` for both firmwares.
+
 ## v0.4.0-beta.2 — 2026-11-07
 
 Beta, pre-release. Changes since `v0.4.0-beta.1`: PS5 capture now runs through
