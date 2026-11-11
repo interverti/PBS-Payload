@@ -705,11 +705,11 @@ avopen_retry:;
           fprintf(f, "Preflight videoOutMode unavailable; keeping requested profile\n");
         }
         if (capture_call_uncertain || ctx.asserted) {
-          fprintf(f, "Preflight videoOutMode interrupted/asserted; stopping capture\n");
+          fprintf(f, "Preflight videoOutMode interrupted/asserted; stopping capture; restart console before retry\n");
           (void)pbs_ps5_worker_shutdown(f);
           pbs_inject_end(&ctx);
           fclose(f);
-          notify("PBS: video mode query failed");
+          notify("PBS: video mode query interrupted. Restart the console before retrying.");
           return 1;
         }
       }
