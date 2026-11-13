@@ -105,7 +105,7 @@ jobs:
           sha256sum payload/build/ps4/pbs-dump.elf
 
       - name: Upload the ${{ matrix.platform }} payload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pbs-${{ matrix.platform }}
           path: ${{ matrix.artifact }}
@@ -113,7 +113,7 @@ jobs:
 
       - name: Upload the PS4 dumper
         if: ${{ matrix.platform == 'ps4' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pbs-ps4-dump
           path: payload/build/ps4/pbs-dump.elf
